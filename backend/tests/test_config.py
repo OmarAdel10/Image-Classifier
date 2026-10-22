@@ -7,6 +7,19 @@ import pytest
 
 from cnn_classifier.config import Config, clear_config_cache, get_config
 
+EXPECTED_CIFAR10 = [
+    "airplane",
+    "automobile",
+    "bird",
+    "cat",
+    "deer",
+    "dog",
+    "frog",
+    "horse",
+    "ship",
+    "truck",
+]
+
 
 class TestConfig:
     """Test Config class loads defaults correctly."""
@@ -56,6 +69,26 @@ class TestConfig:
         config = Config(labels_path=str(labels_file))
         names = config.class_names
         assert names == custom_labels
+
+    def test_class_names_property_wrong_length_file_falls_back(self, tmp_path, monkeypatch):
+        """class_names falls back to CIFAR-10 when labels.json has wrong item count."""
+        labels_file = tmp_path / "short_labels.json"
+        labels_file.write_text(json.dumps(["a", "b", "c"]))
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+        config = Config(labels_path=str(labels_file))
+        assert config.class_names == EXPECTED_CIFAR10
+
+    def test_class_names_property_corrupt_file_falls_back(self, tmp_path, monkeypatch):
+        """class_names falls back to CIFAR-10 when labels.json is invalid JSON."""
+        labels_file = tmp_path / "corrupt_labels.json"
+        labels_file.write_text("{oops")
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+        config = Config(labels_path=str(labels_file))
+        assert config.class_names == EXPECTED_CIFAR10
 
     def test_config_singleton_get_config(self):
         """get_config returns the same instance (singleton pattern)."""
@@ -227,6 +260,30 @@ class TestConfigValidation:
         with pytest.raises(ValueError, match="3 dimensions"):
             _parse_input_size([32, 32])
 
+    def test_parse_input_size_list_out_of_range(self):
+        """List branch range check raises for zero/negative and over-max values."""
+        from cnn_classifier.config import _parse_input_size
+
+        with pytest.raises(ValueError, match="positive"):
+            _parse_input_size([0, 32, 3])
+        with pytest.raises(ValueError, match="positive"):
+            _parse_input_size([-1, 32, 3])
+        with pytest.raises(ValueError, match="positive and <= 4096"):
+            _parse_input_size([5000, 32, 3])
+        with pytest.raises(ValueError, match="positive and <= 4096"):
+            _parse_input_size([32, 32, 4097])
+
+    def test_tensor_and_batch_limit_exact_boundaries_accepted(self):
+        """Configs at exactly MAX_TENSOR_ELEMENTS / MAX_BATCH_ELEMENTS are accepted."""
+        # 1000 * 1000 * 2 = 2,000,000 == MAX_TENSOR_ELEMENTS (accepted)
+        config = Config(input_size_raw="1000,1000,2")
+        assert config.input_size == (1000, 1000, 2)
+
+        # 500 * 500 * 4 * 100 = 100,000,000 == MAX_BATCH_ELEMENTS (accepted)
+        config = Config(input_size_raw="500,500,4", batch_size=100)
+        assert config.input_size == (500, 500, 4)
+        assert config.batch_size == 100
+
     def test_validate_input_size_zero_or_negative(self):
         """Zero or negative dimension raises ValueError."""
         with pytest.raises(ValueError, match="positive"):
@@ -295,29 +352,33 @@ class TestConfigValidation:
         with pytest.raises(ValueError):
             Config(device="cuda:0")
 
-    @patch("cnn_classifier.config._detect_device")
     @patch("torch.cuda.is_available", return_value=True)
-    def test_device_auto_detects_cuda(self, _mock_cuda, mock_detect):
+    def test_device_auto_detects_cuda(self, _mock_cuda):
         """Device 'auto' returns CUDA when available."""
-        mock_detect.return_value = "cuda"
         config = Config(device="auto")
         assert config.device == "cuda"
 
-    @patch("cnn_classifier.config._detect_device")
-    @patch("torch.backends.mps.is_available", return_value=True)
     @patch("torch.cuda.is_available", return_value=False)
-    def test_device_auto_detects_mps(self, _mock_cuda, _mock_mps, mock_detect):
+    @patch("torch.backends.mps.is_available", return_value=True)
+    def test_device_auto_detects_mps(self, _mock_mps, _mock_cuda):
         """Device 'auto' returns MPS when CUDA unavailable but MPS available."""
-        mock_detect.return_value = "mps"
         config = Config(device="auto")
         assert config.device == "mps"
 
-    @patch("cnn_classifier.config._detect_device")
-    def test_device_auto_detects_cpu(self, mock_detect):
+    @patch("torch.cuda.is_available", return_value=False)
+    @patch("torch.backends.mps.is_available", return_value=False)
+    def test_device_auto_detects_cpu(self, _mock_mps, _mock_cuda):
         """Device 'auto' returns CPU when neither CUDA nor MPS available."""
-        mock_detect.return_value = "cpu"
         config = Config(device="auto")
         assert config.device == "cpu"
+
+    def test_device_auto_detects_cpu_without_torch(self):
+        """Device 'auto' returns CPU when torch is not importable."""
+        import sys
+
+        with patch.dict(sys.modules, {"torch": None}):
+            config = Config(device="auto")
+            assert config.device == "cpu"
 
     def test_device_cuda_unavailable_raises(self):
         """Explicit CUDA request raises when unavailable."""
@@ -333,12 +394,35 @@ class TestConfigValidation:
                 with pytest.raises(ValueError, match="MPS requested but not available"):
                     Config(device="mps")
 
+    def test_device_cuda_without_torch_raises(self):
+        """CUDA request without torch installed raises ValueError."""
+        import sys
+
+        with patch.dict(sys.modules, {"torch": None}):
+            with pytest.raises(ValueError, match="PyTorch not installed"):
+                Config(device="cuda")
+
+    def test_device_cpu_without_torch_ok(self):
+        """CPU request passes even when torch is not importable."""
+        import sys
+
+        with patch.dict(sys.modules, {"torch": None}):
+            config = Config(device="cpu")
+            assert config.device == "cpu"
+
     def test_model_path_resolved_relative(self):
         """Relative path resolves to absolute."""
         config = Config(model_path="models/x.pth")
         resolved = config.model_path_resolved
         assert resolved.is_absolute()
         assert resolved.name == "x.pth"
+
+    def test_labels_path_resolved_relative(self):
+        """Labels path resolves to absolute."""
+        config = Config()
+        resolved = config.labels_path_resolved
+        assert resolved.is_absolute()
+        assert resolved.name == "labels.json"
 
     def test_model_path_resolved_absolute_within_project(self, tmp_path, monkeypatch):
         """Absolute path within project root works."""
@@ -398,16 +482,15 @@ class TestConfigSecurity:
         config = Config()
         assert config.port == 8000
 
-    def test_env_file_permissions_warning(self, tmp_path, monkeypatch):
-        """Test .env file permission check (0600 recommended)."""
+    def test_env_file_values_load(self, tmp_path, monkeypatch):
+        """.env file values are loaded (CNN_ prefixed, case-sensitive)."""
         env_file = tmp_path / ".env"
-        env_file.write_text("CNN_PORT=8000\n")
-        env_file.chmod(0o644)
+        env_file.write_text("CNN_PORT=9000\n")
 
         monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
         monkeypatch.chdir(tmp_path)
         config = Config()
-        assert config.port == 8000
+        assert config.port == 9000
 
 
 if __name__ == "__main__":

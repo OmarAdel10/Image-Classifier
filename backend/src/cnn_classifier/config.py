@@ -153,8 +153,7 @@ class Config(BaseSettings):
             if v == "mps" and not torch.backends.mps.is_available():
                 raise ValueError("MPS requested but not available")
         except ImportError:
-            if v != "cpu":
-                raise ValueError("PyTorch not installed, only CPU device available")
+            raise ValueError("PyTorch not installed, only CPU device available")
         return v
 
     @model_validator(mode="after")
