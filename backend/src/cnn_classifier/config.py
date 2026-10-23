@@ -1,6 +1,9 @@
 """Configuration management for CNN Classifier.
 
 Environment variables must use the `CNN_` prefix (e.g., `CNN_PORT=8000`).
+Relative paths are anchored to the project root (not the process working
+directory), so the service runs from any CWD. Override the root with
+`CNN_PROJECT_ROOT` (e.g., for isolated test environments).
 See `.env.example` for all available options.
 """
 
@@ -8,10 +11,10 @@ import json
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Project root anchored to this package location (works in Docker/systemd).
 # Override with CNN_PROJECT_ROOT env var (e.g., for isolated test environments).
@@ -26,29 +29,47 @@ def _get_project_root() -> Path:
     return _PROJECT_ROOT
 
 
-# Maximum tensor elements per batch to prevent OOM (32*32*3*512 = 1.5M, use 2M margin)
-_MAX_TENSOR_ELEMENTS = 2_000_000
-# Maximum batch elements (tensor * batch_size) to prevent OOM
-_MAX_BATCH_ELEMENTS = 100_000_000
+def _resolve_project_path(path_str: str, project_root: Path) -> Path:
+    """Resolve a configured path and verify it stays inside the project root.
+
+    Relative paths are anchored to ``project_root`` (not the process CWD) so
+    defaults work regardless of the working directory. Resolution happens once
+    here and the result is stored on the instance (avoids TOCTOU re-resolution).
+    """
+    path = Path(path_str)
+    if not path.is_absolute():
+        path = project_root / path
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(project_root)
+    except ValueError as exc:
+        raise ValueError(f"Path '{path_str}' resolves outside project root") from exc
+    return resolved
 
 
-def _parse_input_size(v) -> tuple[int, int, int]:
-    """Parse input_size from various formats."""
+# Maximum pixels (H*W) per image to prevent OOM (assumes RGB, C=3 → ~6M elements)
+_MAX_IMAGE_PIXELS = 2_000_000
+# Maximum pixel-batch (H*W * batch_size) to prevent OOM
+_MAX_BATCH_PIXELS = 100_000_000
+
+
+def _parse_input_size(v) -> tuple[int, int]:
+    """Parse input_size from various formats (env string, list, tuple)."""
     if isinstance(v, str):
-        # Parse from env string like "32,32,3"
+        # Parse from env string like "32,32"
         parts = [int(x.strip()) for x in v.split(",")]
-        if len(parts) != 3:
-            raise ValueError("input_size must have 3 dimensions (H,W,C)")
+        if len(parts) != 2:
+            raise ValueError("input_size must have 2 dimensions (H,W)")
         if any(x <= 0 or x > 4096 for x in parts):
             raise ValueError("input_size dimensions must be positive and <= 4096")
         return tuple(parts)
     if isinstance(v, (list, tuple)):
-        if len(v) != 3:
-            raise ValueError("input_size must have 3 dimensions (H,W,C)")
+        if len(v) != 2:
+            raise ValueError("input_size must have 2 dimensions (H,W)")
         if any(x <= 0 or x > 4096 for x in v):
             raise ValueError("input_size dimensions must be positive and <= 4096")
         return tuple(v)
-    raise ValueError("input_size must be tuple/list of 3 ints or comma-separated string")
+    raise ValueError("input_size must be tuple/list of 2 ints or comma-separated string")
 
 
 def _detect_device() -> str:
@@ -88,12 +109,12 @@ class Config(BaseSettings):
 
     # Model paths
     model_path: str = Field(
-        default="models/cifar10_cnn.pth",
+        default="checkpoints/best_model.pt",
         validation_alias="CNN_MODEL_PATH",
         description="Path to trained model weights",
     )
     labels_path: str = Field(
-        default="models/labels.json",
+        default="checkpoints/labels.json",
         validation_alias="CNN_LABELS_PATH",
         description="Path to class labels JSON",
     )
@@ -105,16 +126,24 @@ class Config(BaseSettings):
         description="Inference device (auto detects best available)",
     )
 
-    # Model input - stored as string to allow env var parsing, validated in model_validator
-    input_size_raw: str = Field(
-        default="32,32,3",
-        validation_alias="CNN_INPUT_SIZE_RAW",
-        description="Model input size (H,W,C) as comma-separated string",
+    # Model input size (H, W) for Resize/CenterCrop. NoDecode stops
+    # pydantic-settings from JSON-decoding the env string; the before-validator
+    # below parses formats like "32,32" (env) and tuple/list kwargs instead.
+    input_size: Annotated[tuple[int, int], NoDecode] = Field(
+        default=(32, 32),
+        validation_alias="CNN_INPUT_SIZE",
+        description="Model input size (H, W)",
     )
+
+    @field_validator("input_size", mode="before")
+    @classmethod
+    def _validate_input_size(cls, v) -> tuple[int, int]:
+        """Parse input_size from env string / list / tuple before type coercion."""
+        return _parse_input_size(v)
 
     # Data loading
     batch_size: int = Field(
-        default=32,
+        default=64,
         gt=0,
         le=512,
         validation_alias="CNN_BATCH_SIZE",
@@ -157,50 +186,30 @@ class Config(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def _parse_and_validate(self) -> "Config":
-        """Parse input_size, validate paths are safe, check memory limits."""
-        # Parse input_size from raw string
-        input_size = _parse_input_size(self.input_size_raw)
-        self._input_size_parsed = input_size
-
-        # Check combined tensor size limit to prevent OOM
-        h, w, c = input_size
-        tensor_elements = h * w * c
-        if tensor_elements > _MAX_TENSOR_ELEMENTS:
+    def _validate_memory_and_paths(self) -> "Config":
+        """Enforce memory limits and validate paths are safe."""
+        # Check image/batch pixel limits to prevent OOM (RGB, C=3 assumed)
+        h, w = self.input_size
+        image_pixels = h * w
+        if image_pixels > _MAX_IMAGE_PIXELS:
             raise ValueError(
-                f"input_size {input_size} exceeds max tensor elements "
-                f"({tensor_elements:,} > {_MAX_TENSOR_ELEMENTS:,})"
+                f"input_size {self.input_size} exceeds max image pixels "
+                f"({image_pixels:,} > {_MAX_IMAGE_PIXELS:,})"
             )
 
-        # Check combined batch size limit
-        batch_elements = tensor_elements * self.batch_size
-        if batch_elements > _MAX_BATCH_ELEMENTS:
+        batch_pixels = image_pixels * self.batch_size
+        if batch_pixels > _MAX_BATCH_PIXELS:
             raise ValueError(
-                f"batch_size {self.batch_size} with input_size {input_size} "
-                f"exceeds max batch elements ({batch_elements:,} > {_MAX_BATCH_ELEMENTS:,})"
+                f"batch_size {self.batch_size} with input_size {self.input_size} "
+                f"exceeds max batch pixels ({batch_pixels:,} > {_MAX_BATCH_PIXELS:,})"
             )
 
         # Validate paths are safe (no traversal outside project)
         project_root = _get_project_root()
-        for path_str in (self.model_path, self.labels_path):
-            path = Path(path_str)
-            try:
-                resolved = path.resolve()
-                # Must be within project root (anchored to package location)
-                resolved.relative_to(project_root)
-            except ValueError:
-                raise ValueError(f"Path '{path_str}' resolves outside project root: {resolved}")
-
-        # Store resolved paths for properties (avoids TOCTOU)
-        self._model_path_resolved = Path(self.model_path).resolve()
-        self._labels_path_resolved = Path(self.labels_path).resolve()
+        self._model_path_resolved = _resolve_project_path(self.model_path, project_root)
+        self._labels_path_resolved = _resolve_project_path(self.labels_path, project_root)
 
         return self
-
-    @property
-    def input_size(self) -> tuple[int, int, int]:
-        """Model input size (H, W, C)."""
-        return self._input_size_parsed
 
     @property
     def class_names(self) -> list[str]:
@@ -208,11 +217,11 @@ class Config(BaseSettings):
         # Try to load from labels_path if it exists
         if self._labels_path_resolved.exists():
             try:
-                with open(self._labels_path_resolved) as f:
+                with open(self._labels_path_resolved, encoding="utf-8") as f:
                     labels = json.load(f)
                 if isinstance(labels, list) and len(labels) == 10:
                     return labels
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 pass
         # Fallback to hardcoded CIFAR-10 classes
         return [

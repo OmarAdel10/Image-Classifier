@@ -25,16 +25,16 @@ class TestConfig:
     """Test Config class loads defaults correctly."""
 
     def test_config_loads_defaults(self):
-        """Config loads all default values from .env.example."""
+        """Config loads all default values."""
         clear_config_cache()
         config = Config()
 
         assert config.port == 8000
-        assert config.model_path == "models/cifar10_cnn.pth"
-        assert config.labels_path == "models/labels.json"
+        assert config.model_path == "checkpoints/best_model.pt"
+        assert config.labels_path == "checkpoints/labels.json"
         assert config.device in ("cpu", "cuda", "mps")  # auto detects
-        assert config.input_size == (32, 32, 3)
-        assert config.batch_size == 32
+        assert config.input_size == (32, 32)
+        assert config.batch_size == 64
         assert config.num_workers == 4
         assert config.seed == 42
 
@@ -45,18 +45,7 @@ class TestConfig:
 
         assert isinstance(names, list)
         assert len(names) == 10
-        assert names == [
-            "airplane",
-            "automobile",
-            "bird",
-            "cat",
-            "deer",
-            "dog",
-            "frog",
-            "horse",
-            "ship",
-            "truck",
-        ]
+        assert names == EXPECTED_CIFAR10
 
     def test_class_names_property_from_file(self, tmp_path, monkeypatch):
         """class_names property loads from labels.json when present."""
@@ -87,6 +76,15 @@ class TestConfig:
 
         monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
         monkeypatch.chdir(tmp_path)
+        config = Config(labels_path=str(labels_file))
+        assert config.class_names == EXPECTED_CIFAR10
+
+    def test_class_names_invalid_utf8_falls_back(self, tmp_path, monkeypatch):
+        """class_names falls back when labels.json contains invalid UTF-8 bytes."""
+        labels_file = tmp_path / "labels.json"
+        labels_file.write_bytes(b"\xff\xfe{oops")
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
         config = Config(labels_path=str(labels_file))
         assert config.class_names == EXPECTED_CIFAR10
 
@@ -124,7 +122,7 @@ class TestConfig:
         monkeypatch.setenv("CNN_MODEL_PATH", "models/custom.pth")
         monkeypatch.setenv("CNN_LABELS_PATH", "models/custom_labels.json")
         monkeypatch.setenv("CNN_DEVICE", "auto")
-        monkeypatch.setenv("CNN_INPUT_SIZE_RAW", "64,64,3")
+        monkeypatch.setenv("CNN_INPUT_SIZE", "64,64")
         monkeypatch.setenv("CNN_BATCH_SIZE", "128")
         monkeypatch.setenv("CNN_NUM_WORKERS", "8")
         monkeypatch.setenv("CNN_SEED", "999")
@@ -136,7 +134,7 @@ class TestConfig:
         assert config.model_path == "models/custom.pth"
         assert config.labels_path == "models/custom_labels.json"
         assert config.device in ("cpu", "cuda", "mps")
-        assert config.input_size == (64, 64, 3)
+        assert config.input_size == (64, 64)
         assert config.batch_size == 128
         assert config.num_workers == 8
         assert config.seed == 999
@@ -150,7 +148,7 @@ class TestConfig:
         config = Config()
 
         assert config.port == 8000
-        assert config.batch_size == 32
+        assert config.batch_size == 64
 
     def test_env_case_sensitive(self, monkeypatch):
         """Env vars with wrong case are ignored (case_sensitive=True)."""
@@ -215,88 +213,92 @@ class TestConfigValidation:
         """Seed accepts 0."""
         assert Config(seed=0).seed == 0
 
-    def test_input_size_tuple_of_three_positive_ints(self):
-        """Input size must be a tuple of three positive integers."""
+    def test_input_size_tuple_of_two_positive_ints(self):
+        """Input size must be a tuple of two positive integers."""
         with pytest.raises(ValueError):
-            Config(input_size_raw="32,32")  # wrong length
+            Config(input_size="32,32,3")  # wrong length (3 parts)
         with pytest.raises(ValueError):
-            Config(input_size_raw="0,32,3")  # zero value
+            Config(input_size="0,32")  # zero value
 
     def test_input_size_max_4096(self):
         """Input size dimensions must be <= 4096."""
         with pytest.raises(ValueError):
-            Config(input_size_raw="4097,32,3")
+            Config(input_size="4097,32")
         with pytest.raises(ValueError):
-            Config(input_size_raw="32,4097,3")
-        with pytest.raises(ValueError):
-            Config(input_size_raw="32,32,4097")
+            Config(input_size="32,4097")
 
     def test_validate_input_size_valid_string(self):
         """Valid comma-separated string parses to tuple."""
-        config = Config(input_size_raw="64,64,3")
-        assert config.input_size == (64, 64, 3)
+        config = Config(input_size="64,64")
+        assert config.input_size == (64, 64)
 
     def test_validate_input_size_valid_string_with_spaces(self):
         """String with spaces strips and parses."""
-        config = Config(input_size_raw=" 32 , 32 , 3 ")
-        assert config.input_size == (32, 32, 3)
+        config = Config(input_size=" 32 , 32 ")
+        assert config.input_size == (32, 32)
 
     def test_validate_input_size_valid_tuple(self):
-        """Valid tuple passes through (via internal function)."""
+        """Valid tuple/list pass through (via internal function)."""
         from cnn_classifier.config import _parse_input_size
 
-        assert _parse_input_size((64, 64, 3)) == (64, 64, 3)
-        assert _parse_input_size([64, 64, 3]) == (64, 64, 3)
+        assert _parse_input_size((64, 64)) == (64, 64)
+        assert _parse_input_size([64, 64]) == (64, 64)
+
+    def test_input_size_kwarg_tuple_plan_contract(self):
+        """Config accepts input_size as tuple kwarg (plan contract)."""
+        assert Config(input_size=(32, 32), device="cpu").input_size == (32, 32)
+        assert Config(input_size=(224, 224), device="cpu").input_size == (224, 224)
+        assert Config(input_size=[64, 64], device="cpu").input_size == (64, 64)
 
     def test_validate_input_size_invalid_string_length(self):
         """Wrong-length string raises ValueError."""
-        with pytest.raises(ValueError, match="3 dimensions"):
-            Config(input_size_raw="32,32")
+        with pytest.raises(ValueError, match="2 dimensions"):
+            Config(input_size="32,32,3")
 
     def test_validate_input_size_invalid_tuple_length(self):
         """Wrong-length list raises ValueError."""
         from cnn_classifier.config import _parse_input_size
 
-        with pytest.raises(ValueError, match="3 dimensions"):
-            _parse_input_size([32, 32])
+        with pytest.raises(ValueError, match="2 dimensions"):
+            _parse_input_size([32, 32, 3])
 
     def test_parse_input_size_list_out_of_range(self):
         """List branch range check raises for zero/negative and over-max values."""
         from cnn_classifier.config import _parse_input_size
 
         with pytest.raises(ValueError, match="positive"):
-            _parse_input_size([0, 32, 3])
+            _parse_input_size([0, 32])
         with pytest.raises(ValueError, match="positive"):
-            _parse_input_size([-1, 32, 3])
+            _parse_input_size([-1, 32])
         with pytest.raises(ValueError, match="positive and <= 4096"):
-            _parse_input_size([5000, 32, 3])
+            _parse_input_size([5000, 32])
         with pytest.raises(ValueError, match="positive and <= 4096"):
-            _parse_input_size([32, 32, 4097])
+            _parse_input_size([32, 4097])
 
-    def test_tensor_and_batch_limit_exact_boundaries_accepted(self):
-        """Configs at exactly MAX_TENSOR_ELEMENTS / MAX_BATCH_ELEMENTS are accepted."""
-        # 1000 * 1000 * 2 = 2,000,000 == MAX_TENSOR_ELEMENTS (accepted)
-        config = Config(input_size_raw="1000,1000,2")
-        assert config.input_size == (1000, 1000, 2)
+    def test_image_and_batch_pixel_limit_exact_boundaries_accepted(self):
+        """Configs at exactly MAX_IMAGE_PIXELS / MAX_BATCH_PIXELS are accepted."""
+        # 1000 * 2000 = 2,000,000 == _MAX_IMAGE_PIXELS (accepted)
+        config = Config(input_size="1000,2000", batch_size=1)
+        assert config.input_size == (1000, 2000)
 
-        # 500 * 500 * 4 * 100 = 100,000,000 == MAX_BATCH_ELEMENTS (accepted)
-        config = Config(input_size_raw="500,500,4", batch_size=100)
-        assert config.input_size == (500, 500, 4)
-        assert config.batch_size == 100
+        # 1000 * 2000 * 50 = 100,000,000 == _MAX_BATCH_PIXELS (accepted)
+        config = Config(input_size="1000,2000", batch_size=50)
+        assert config.input_size == (1000, 2000)
+        assert config.batch_size == 50
 
     def test_validate_input_size_zero_or_negative(self):
         """Zero or negative dimension raises ValueError."""
         with pytest.raises(ValueError, match="positive"):
-            Config(input_size_raw="0,32,3")
+            Config(input_size="0,32")
         with pytest.raises(ValueError, match="positive"):
-            Config(input_size_raw="-1,32,3")
+            Config(input_size="-1,32")
 
     def test_validate_input_size_invalid_type(self):
         """Invalid type (dict, int, None) raises ValueError."""
         from cnn_classifier.config import _parse_input_size
 
-        with pytest.raises(ValueError, match="tuple/list of 3 ints or comma-separated string"):
-            _parse_input_size({"h": 32, "w": 32, "c": 3})
+        with pytest.raises(ValueError, match="tuple/list of 2 ints or comma-separated string"):
+            _parse_input_size({"h": 32, "w": 32})
         with pytest.raises(ValueError):
             _parse_input_size(123)
         with pytest.raises(ValueError):
@@ -309,36 +311,37 @@ class TestConfigValidation:
         with pytest.raises(ValueError):
             _parse_input_size("")  # empty string
         with pytest.raises(ValueError):
-            _parse_input_size("32,abc,3")  # non-numeric
+            _parse_input_size("32,abc")  # non-numeric
         with pytest.raises(ValueError):
-            _parse_input_size("32.5,32,3")  # float
+            _parse_input_size("32.5,32")  # float
+        with pytest.raises(ValueError):
+            _parse_input_size("32")  # single value
         # Boundary max values
-        assert _parse_input_size("4096,32,3") == (4096, 32, 3)
-        assert _parse_input_size("32,4096,3") == (32, 4096, 3)
-        assert _parse_input_size("32,32,4096") == (32, 32, 4096)
+        assert _parse_input_size("4096,32") == (4096, 32)
+        assert _parse_input_size("32,4096") == (32, 4096)
         # Whitespace variants
-        assert _parse_input_size("\t32\n,\r32\t,\n3\t") == (32, 32, 3)
+        assert _parse_input_size("\t32\n,\r32\t") == (32, 32)
 
-    def test_tensor_size_limit(self):
-        """Combined tensor elements must not exceed MAX_TENSOR_ELEMENTS."""
-        # 4096 * 4096 * 3 = 50,331,648 > 2,000,000
-        with pytest.raises(ValueError, match="exceeds max tensor elements"):
-            Config(input_size_raw="4096,4096,3")
+    def test_image_pixel_limit(self):
+        """Combined image pixels (H*W) must not exceed MAX_IMAGE_PIXELS."""
+        # 4096 * 4096 = 16,777,216 > 2,000,000
+        with pytest.raises(ValueError, match="exceeds max image pixels"):
+            Config(input_size="4096,4096")
 
-    def test_batch_elements_limit(self):
-        """Combined batch elements (tensor * batch_size) must not exceed MAX_BATCH_ELEMENTS."""
-        # 100 * 100 * 3 * 512 = 15,360,000 < 100,000,000 (OK)
-        config = Config(input_size_raw="100,100,3", batch_size=512)
-        assert config.input_size == (100, 100, 3)
+    def test_batch_pixel_limit(self):
+        """Combined batch pixels (H*W * batch_size) must not exceed MAX_BATCH_PIXELS."""
+        # 100 * 100 * 512 = 5,120,000 < 100,000,000 (OK)
+        config = Config(input_size="100,100", batch_size=512)
+        assert config.input_size == (100, 100)
         assert config.batch_size == 512
 
-        # 200 * 200 * 3 * 512 = 61,440,000 < 100,000,000 (OK)
-        config = Config(input_size_raw="200,200,3", batch_size=512)
+        # 300 * 300 * 512 = 46,080,000 < 100,000,000 (OK)
+        config = Config(input_size="300,300", batch_size=512)
         assert config.batch_size == 512
 
-        # 300 * 300 * 3 * 512 = 138,240,000 > 100,000,000 (exceeds)
-        with pytest.raises(ValueError, match="exceeds max batch elements"):
-            Config(input_size_raw="300,300,3", batch_size=512)
+        # 700 * 700 * 512 = 250,880,000 > 100,000,000 (exceeds)
+        with pytest.raises(ValueError, match="exceeds max batch pixels"):
+            Config(input_size="700,700", batch_size=512)
 
     def test_seed_negative_raises(self):
         """Negative seed raises ValidationError."""
@@ -411,7 +414,7 @@ class TestConfigValidation:
             assert config.device == "cpu"
 
     def test_model_path_resolved_relative(self):
-        """Relative path resolves to absolute."""
+        """Relative path anchors to project root and resolves to absolute."""
         config = Config(model_path="models/x.pth")
         resolved = config.model_path_resolved
         assert resolved.is_absolute()
@@ -423,6 +426,15 @@ class TestConfigValidation:
         resolved = config.labels_path_resolved
         assert resolved.is_absolute()
         assert resolved.name == "labels.json"
+
+    def test_relative_paths_anchored_to_project_root_not_cwd(self, tmp_path, monkeypatch):
+        """Relative defaults anchor to project root regardless of process CWD."""
+        from cnn_classifier.config import _PROJECT_ROOT
+
+        monkeypatch.chdir(tmp_path)  # unrelated CWD, no CNN_PROJECT_ROOT override
+        config = Config()
+        assert config.model_path_resolved == _PROJECT_ROOT / "checkpoints" / "best_model.pt"
+        assert config.labels_path_resolved == _PROJECT_ROOT / "checkpoints" / "labels.json"
 
     def test_model_path_resolved_absolute_within_project(self, tmp_path, monkeypatch):
         """Absolute path within project root works."""
