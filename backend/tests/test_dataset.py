@@ -319,7 +319,7 @@ class TestCustomImageFolder:
 
 
 class TestSafeLoader:
-    """Hardened loader: pixel cap, extension allowlist, symlink rejection."""
+    """Hardened scan + loader: pixel cap, allowlist, symlink containment."""
 
     def test_oversized_image_raises(self, tmp_path, monkeypatch):
         from cnn_classifier.data import custom_dataset as custom_dataset_module
@@ -332,23 +332,97 @@ class TestSafeLoader:
             dataset[0]
 
     def test_symlinked_image_rejected(self, tmp_path):
-        real_dir = tmp_path / "real"
-        real_dir.mkdir()
-        Image.new("RGB", (32, 32), color=(120, 120, 120)).save(real_dir / "img.jpg")
+        """Leaf symlinks are rejected by the loader (target inside root)."""
         root = tmp_path / "classes"
         (root / "cat").mkdir(parents=True)
-        (root / "cat" / "link.jpg").symlink_to(real_dir / "img.jpg")
+        Image.new("RGB", (32, 32), color=(120, 120, 120)).save(root / "real.jpg")
+        (root / "cat" / "link.jpg").symlink_to(root / "real.jpg")
         dataset = CustomImageFolder(root=str(root))
         with pytest.raises(ValueError, match="symlink"):
             dataset[0]
 
-    def test_disallowed_extension_raises(self, tmp_path):
+    def test_symlinked_class_dir_rejected(self, tmp_path):
+        """MED-1 regression: symlinked class dirs cannot pull outside-root images."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        Image.new("RGB", (32, 32), color=(5, 5, 5)).save(outside / "img.jpg")
+        root = tmp_path / "classes"
+        root.mkdir()
+        (root / "cat").symlink_to(outside)
+        with pytest.raises(ValueError, match="escapes dataset root"):
+            CustomImageFolder(root=str(root))
+
+    def test_disallowed_extension_excluded_at_scan(self, tmp_path):
+        """MED-2: scan-time allowlist — a class dir whose only files are
+        unsupported formats fails loudly at init (torchvision semantics),
+        proving the scanner excluded them before load time."""
         root = tmp_path / "classes"
         (root / "cat").mkdir(parents=True)
         (root / "cat" / "img.tiff").write_bytes(b"not really a tiff")
-        dataset = CustomImageFolder(root=str(root))
-        with pytest.raises(ValueError, match="extension"):
+        with pytest.raises(FileNotFoundError, match="no valid file"):
+            CustomImageFolder(root=str(root))
+
+    def test_mixed_folder_counts_only_loadable(self, tmp_path):
+        """MED-2: a stray unsupported file neither inflates len() nor aborts iteration."""
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        Image.new("RGB", (32, 32), color=(9, 9, 9)).save(cat / "valid.jpg")
+        (cat / "stray.bmp").write_bytes(b"BM fake")
+        dataset = CustomImageFolder(root=str(tmp_path), transform=transforms.ToTensor())
+        assert len(dataset) == 1
+        img, _ = dataset[0]  # iteration works, no abort
+        assert img.shape == (3, 32, 32)
+
+    def test_uppercase_extension_loads(self, tmp_path):
+        """Case-insensitive suffix handling: .JPG loads."""
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        Image.new("RGB", (32, 32), color=(1, 2, 3)).save(cat / "upper.JPG")
+        dataset = CustomImageFolder(root=str(tmp_path))
+        assert len(dataset) == 1
+        img, _ = dataset[0]
+        assert img.size == (32, 32)
+
+    def test_l_mode_png_converted_to_rgb(self, tmp_path):
+        """Grayscale PNGs load as 3-channel RGB tensors."""
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        Image.new("L", (32, 32), color=128).save(cat / "gray.png")
+        dataset = CustomImageFolder(root=str(tmp_path), transform=transforms.ToTensor())
+        img, _ = dataset[0]
+        assert img.shape == (3, 32, 32)
+
+    def test_corrupt_image_raises_value_error(self, tmp_path):
+        """Corrupt payloads raise the module ValueError contract, not raw OSError."""
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        (cat / "corrupt.jpg").write_bytes(b"this is not a jpeg")
+        dataset = CustomImageFolder(root=str(tmp_path))
+        with pytest.raises(ValueError, match="unreadable image file"):
             dataset[0]
+
+    def test_safe_loader_direct_rejects_bad_extension(self, tmp_path):
+        """Direct unit: _safe_loader's load-time extension check (defense-in-depth;
+        unreachable via dataset flow because scan-time is_valid_file filters first)."""
+        from cnn_classifier.data import custom_dataset as custom_dataset_module
+
+        bad = tmp_path / "img.tiff"
+        bad.write_bytes(b"dummy")
+        with pytest.raises(ValueError, match="unsupported image extension"):
+            custom_dataset_module._safe_loader(str(bad))
+
+    def test_data_loader_with_workers_smoke(self, tmp_path):
+        """num_workers>0 regime: workers spawn and iterate the full folder."""
+        from torch.utils.data import DataLoader
+
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        for i in range(3):
+            Image.new("RGB", (32, 32), color=(i * 40, 0, 0)).save(cat / f"img{i}.jpg")
+        dataset = CustomImageFolder(root=str(tmp_path), transform=transforms.ToTensor())
+        loader = DataLoader(dataset, batch_size=2, num_workers=2)
+        total = sum(x.shape[0] for x, _ in loader)
+        assert total == 3
 
 
 if __name__ == "__main__":

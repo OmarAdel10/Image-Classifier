@@ -9,10 +9,16 @@ computed on unaugmented data. The train/val split is stratified per class
 and seeded for reproducibility.
 
 Seeding policy: the train DataLoader's shuffle order is seeded from
-``config.seed`` via a dedicated ``torch.Generator``. Augmentation
-randomness draws from the global torch RNG, so full reproducibility
-requires ``torch.manual_seed(config.seed)`` before iterating (the
-training entry point is responsible for this).
+``config.seed`` via a dedicated ``torch.Generator``. Reproducibility of
+augmentation depends on the worker regime: with ``num_workers=0`` the
+global torch RNG governs augmentation, so ``torch.manual_seed(seed)``
+before iterating gives full reproducibility (the training entry point
+is responsible for this; tests cover this regime only). With
+``num_workers>0`` each worker derives its augmentation seed from the
+loader's base seed, and ``torch.manual_seed`` does NOT reach workers.
+Note: each call builds a fresh ``Generator`` from ``config.seed``, so
+recreating loaders replays the identical first-epoch shuffle — create
+loaders once and reuse them across epochs.
 """
 
 import random
