@@ -90,13 +90,18 @@ jobs:
           key: cifar10-python-md5-c58f3010
           restore-keys: cifar10-python-
 
-      - name: Download CIFAR-10 (if not cached)
+      - name: Download and verify CIFAR-10 (self-healing cache)
         run: |
           mkdir -p /home/runner/.cache/cnn-cifar10
-          if [ ! -f /home/runner/.cache/cnn-cifar10/cifar-10-python.tar.gz ]; then
-            wget -c --tries=3 --timeout=60 -P /home/runner/.cache/cnn-cifar10 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+          cd /home/runner/.cache/cnn-cifar10
+          # Self-heal: purge a corrupt or partial archive instead of
+          # failing forever on an immutable cache key.
+          if [ ! -f cifar-10-python.tar.gz ] || ! md5sum -c <<< 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz'; then
+            rm -f cifar-10-python.tar.gz
+            wget -c --tries=3 --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
           fi
-          echo 'c58f30108f718f92721af3b95e74349a  /home/runner/.cache/cnn-cifar10/cifar-10-python.tar.gz' | md5sum -c -
+          echo 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' | md5sum -c -
+          echo '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz' | sha256sum -c -
 
       - name: Run tests (pytest)
         working-directory: backend
