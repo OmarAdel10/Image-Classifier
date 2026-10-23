@@ -55,7 +55,7 @@ jobs:
   python-backend:
     name: Python Backend CI
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45  # first run downloads CIFAR-10 (~170MB); cached runs ~5 min
     permissions:
       contents: read
     steps:
@@ -83,6 +83,23 @@ jobs:
         working-directory: backend
         run: black --check src/ tests/
 
+      - name: Cache CIFAR-10 dataset
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: /home/runner/.cache/cnn-cifar10
+          key: cifar10-python-md5-c58f3010
+          restore-keys: cifar10-python-
+
+      - name: Download CIFAR-10 (if not cached)
+        run: |
+          mkdir -p /home/runner/.cache/cnn-cifar10
+          if [ ! -f /home/runner/.cache/cnn-cifar10/cifar-10-python.tar.gz ]; then
+            wget -c --tries=3 --timeout=60 -P /home/runner/.cache/cnn-cifar10 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+          fi
+          echo 'c58f30108f718f92721af3b95e74349a  /home/runner/.cache/cnn-cifar10/cifar-10-python.tar.gz' | md5sum -c -
+
       - name: Run tests (pytest)
         working-directory: backend
+        env:
+          CNN_TEST_DATA_DIR: /home/runner/.cache/cnn-cifar10
         run: python -m pytest tests/ -v
