@@ -7,12 +7,19 @@ The train split applies augmentation (RandomCrop with padding, horizontal
 flip) while val/test only apply ToTensor + Normalize, so val metrics are
 computed on unaugmented data. The train/val split is stratified per class
 and seeded for reproducibility.
+
+Seeding policy: the train DataLoader's shuffle order is seeded from
+``config.seed`` via a dedicated ``torch.Generator``. Augmentation
+randomness draws from the global torch RNG, so full reproducibility
+requires ``torch.manual_seed(config.seed)`` before iterating (the
+training entry point is responsible for this).
 """
 
 import random
 from collections.abc import Sequence
 from pathlib import Path
 
+import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 
@@ -56,6 +63,9 @@ def _stratified_split(
     class distribution is preserved in both splits. Deterministic for a
     given seed.
     """
+    if not 0 <= val_ratio < 1:
+        raise ValueError(f"val_ratio must be in [0, 1), got {val_ratio}")
+
     by_class: dict[int, list[int]] = {}
     for idx, target in enumerate(targets):
         by_class.setdefault(target, []).append(idx)
@@ -85,6 +95,11 @@ def get_dataloaders(
     """
     if not 0 <= val_ratio < 1:
         raise ValueError(f"val_ratio must be in [0, 1), got {val_ratio}")
+
+    if tuple(config.input_size) != (32, 32):
+        raise ValueError(
+            f"CIFAR-10 loaders require input_size=(32, 32), got {tuple(config.input_size)}"
+        )
 
     if data_dir is None:
         data_dir = _get_project_root() / "data"
@@ -121,6 +136,7 @@ def get_dataloaders(
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
+        generator=torch.Generator().manual_seed(config.seed),
     )
     val_loader = DataLoader(
         val_set,

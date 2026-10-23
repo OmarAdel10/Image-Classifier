@@ -1,7 +1,6 @@
 """Tests for cnn_classifier.data (CIFAR-10 loaders + CustomImageFolder)."""
 
 import os
-from pathlib import Path
 
 import pytest
 import torch
@@ -10,7 +9,11 @@ from torchvision import transforms
 
 from cnn_classifier.config import Config
 from cnn_classifier.data import CIFAR10_MEAN, CIFAR10_STD, CustomImageFolder, get_dataloaders
-from cnn_classifier.data.dataset import _stratified_split
+from cnn_classifier.data.dataset import (
+    _build_eval_transform,
+    _build_train_transform,
+    _stratified_split,
+)
 
 
 @pytest.fixture(scope="session")
@@ -18,7 +21,8 @@ def cifar_data_dir(tmp_path_factory):
     """Data dir for the CIFAR-10 download.
 
     Env override CNN_TEST_DATA_DIR allows caching the ~170MB download
-    across local runs; CI uses a fresh per-session tmp dir.
+    across local runs; CI reuses the cached dataset dir
+    (/home/runner/.cache/cnn-cifar10) via the same env var.
     """
     env_dir = os.environ.get("CNN_TEST_DATA_DIR")
     if env_dir:
@@ -67,7 +71,8 @@ class TestStratifiedSplit:
 
     def test_split_disjoint_and_complete(self):
         targets = [0] * 7 + [1] * 5
-        train_idx, val_idx = _stratified_split(targets, val_ratio=0.1, seed=0)
+        train_idx, val_idx = _stratified_split(targets, val_ratio=0.5, seed=0)
+        assert len(val_idx) == 5  # non-empty: 3 from class 0, 2 from class 1
         assert set(train_idx) & set(val_idx) == set()
         assert sorted(train_idx + val_idx) == list(range(len(targets)))
 
@@ -89,6 +94,19 @@ class TestStratifiedSplit:
         train_idx, val_idx = _stratified_split(targets, val_ratio=0.0, seed=42)
         assert val_idx == []
         assert len(train_idx) == 4
+
+    def test_small_class_gives_zero_val_samples(self):
+        """Single-sample classes contribute nothing to val (int(1 * 0.5) == 0)."""
+        train_idx, val_idx = _stratified_split([0, 1], val_ratio=0.5, seed=0)
+        assert val_idx == []
+        assert sorted(train_idx) == [0, 1]
+
+    def test_direct_negative_ratio_raises(self):
+        """The internal guard fires even on direct calls, not just via the wrapper."""
+        with pytest.raises(ValueError, match="val_ratio"):
+            _stratified_split([0, 1, 2], val_ratio=-0.1)
+        with pytest.raises(ValueError, match="val_ratio"):
+            _stratified_split([0, 1, 2], val_ratio=1.0)
 
 
 class TestGetDataloaders:
@@ -148,25 +166,32 @@ class TestGetDataloaders:
         assert torch.isfinite(x).all()
         assert float(x.min()) >= -2.5
         assert float(x.max()) <= 2.5
+        # Normalize provably ran: raw [0, 1] pixels would never go negative.
+        assert float(x.min()) < 0
 
-    def test_default_data_dir_resolves_to_project_root(self, monkeypatch, cifar_data_dir):
-        """data_dir=None anchors the download dir at the project root."""
+    def test_default_data_dir_resolves_to_project_root(self, monkeypatch, tmp_path):
+        """data_dir=None anchors CIFAR-10 at <project_root>/data (hermetic)."""
         from cnn_classifier.data import dataset as dataset_module
 
-        # Reuse the session-cached dataset: link the archive and extracted
-        # folder into the default dir so no network download is triggered.
-        default_dir = Path(cifar_data_dir) / "data"
-        default_dir.mkdir(parents=True, exist_ok=True)
-        batches_link = default_dir / "cifar-10-batches-py"
-        archive_link = default_dir / "cifar-10-python.tar.gz"
-        if not batches_link.exists():
-            batches_link.symlink_to(Path(cifar_data_dir) / "cifar-10-batches-py")
-        if not archive_link.exists():
-            archive_link.symlink_to(Path(cifar_data_dir) / "cifar-10-python.tar.gz")
-        monkeypatch.setattr(dataset_module, "_get_project_root", lambda: Path(cifar_data_dir))
+        captured_roots: list[str] = []
+
+        class FakeCIFAR10:
+            def __init__(self, root, train, download, transform):
+                captured_roots.append(root)
+                self.targets = [0] * 10 + [1] * 10
+
+            def __getitem__(self, idx):
+                return torch.zeros(3, 32, 32), 0
+
+            def __len__(self):
+                return 20
+
+        monkeypatch.setattr(dataset_module.datasets, "CIFAR10", FakeCIFAR10)
+        monkeypatch.setattr(dataset_module, "_get_project_root", lambda: tmp_path)
         cfg = Config(batch_size=4, num_workers=0)
         result = get_dataloaders(cfg)
         assert len(result) == 3
+        assert captured_roots == [str(tmp_path / "data")] * 3
 
     def test_val_ratio_must_be_non_negative(self, cifar_data_dir):
         cfg = Config(batch_size=4, num_workers=0)
@@ -177,6 +202,83 @@ class TestGetDataloaders:
         cfg = Config(batch_size=4, num_workers=0)
         with pytest.raises(ValueError, match="val_ratio"):
             get_dataloaders(cfg, data_dir=cifar_data_dir, val_ratio=1.0)
+
+    def test_input_size_must_be_32x32(self, cifar_data_dir):
+        """Loaders fail fast on non-CIFAR input sizes (eval has no Resize)."""
+        cfg = Config(input_size=(64, 64), batch_size=4, num_workers=0)
+        with pytest.raises(ValueError, match="input_size"):
+            get_dataloaders(cfg, data_dir=cifar_data_dir)
+
+    def test_train_loader_reproducible_given_seed(self, cifar_data_dir):
+        """Same config + same global RNG state -> identical first train batch."""
+        cfg = Config(batch_size=4, num_workers=0, seed=123)
+        train_a, _, _ = get_dataloaders(cfg, data_dir=cifar_data_dir)
+        torch.manual_seed(999)
+        x_a, y_a = next(iter(train_a))
+        train_b, _, _ = get_dataloaders(cfg, data_dir=cifar_data_dir)
+        torch.manual_seed(999)
+        x_b, y_b = next(iter(train_b))
+        assert torch.equal(y_a, y_b)  # generator-seeded sampler order
+        assert torch.equal(x_a, x_b)  # manual_seed-governed augmentation
+
+
+class TestTransforms:
+    """Structural + behavioral tests for the train/eval transform builders."""
+
+    @staticmethod
+    def _varied_image() -> Image.Image:
+        """A spatially varied image so crop/flip changes are detectable."""
+        img = Image.new("RGB", (32, 32))
+        for x in range(32):
+            for y in range(32):
+                img.putpixel((x, y), (x * 8 % 256, y * 8 % 256, (x + y) * 4 % 256))
+        return img
+
+    def test_train_transform_structure(self):
+        t = _build_train_transform((32, 32))
+        assert [type(step) for step in t.transforms] == [
+            transforms.RandomCrop,
+            transforms.RandomHorizontalFlip,
+            transforms.ToTensor,
+            transforms.Normalize,
+        ]
+        assert t.transforms[0].padding == 4
+        assert t.transforms[0].size == (32, 32)
+
+    def test_eval_transform_structure(self):
+        t = _build_eval_transform()
+        assert [type(step) for step in t.transforms] == [
+            transforms.ToTensor,
+            transforms.Normalize,
+        ]
+
+    def test_train_and_eval_builders_differ(self):
+        train_types = [type(s) for s in _build_train_transform((32, 32)).transforms]
+        eval_types = [type(s) for s in _build_eval_transform().transforms]
+        assert train_types != eval_types
+
+    def test_train_transform_is_stochastic(self):
+        t = _build_train_transform((32, 32))
+        img = self._varied_image()
+        torch.manual_seed(0)
+        a = t(img)
+        torch.manual_seed(1)
+        b = t(img)
+        assert not torch.equal(a, b)
+
+    def test_train_transform_deterministic_given_seed(self):
+        t = _build_train_transform((32, 32))
+        img = self._varied_image()
+        torch.manual_seed(42)
+        a = t(img)
+        torch.manual_seed(42)
+        b = t(img)
+        assert torch.equal(a, b)
+
+    def test_eval_transform_is_deterministic(self):
+        t = _build_eval_transform()
+        img = self._varied_image()
+        assert torch.equal(t(img), t(img))
 
 
 class TestCustomImageFolder:
@@ -214,6 +316,39 @@ class TestCustomImageFolder:
     def test_class_to_idx_mapping(self, image_root):
         dataset = CustomImageFolder(root=str(image_root))
         assert dataset.class_to_idx == {"cat": 0, "dog": 1}
+
+
+class TestSafeLoader:
+    """Hardened loader: pixel cap, extension allowlist, symlink rejection."""
+
+    def test_oversized_image_raises(self, tmp_path, monkeypatch):
+        from cnn_classifier.data import custom_dataset as custom_dataset_module
+
+        (tmp_path / "cat").mkdir()
+        Image.new("RGB", (32, 32), color=(10, 20, 30)).save(tmp_path / "cat" / "img.jpg")
+        monkeypatch.setattr(custom_dataset_module, "_MAX_IMAGE_PIXELS", 100)
+        dataset = CustomImageFolder(root=str(tmp_path))
+        with pytest.raises(ValueError, match="pixel cap"):
+            dataset[0]
+
+    def test_symlinked_image_rejected(self, tmp_path):
+        real_dir = tmp_path / "real"
+        real_dir.mkdir()
+        Image.new("RGB", (32, 32), color=(120, 120, 120)).save(real_dir / "img.jpg")
+        root = tmp_path / "classes"
+        (root / "cat").mkdir(parents=True)
+        (root / "cat" / "link.jpg").symlink_to(real_dir / "img.jpg")
+        dataset = CustomImageFolder(root=str(root))
+        with pytest.raises(ValueError, match="symlink"):
+            dataset[0]
+
+    def test_disallowed_extension_raises(self, tmp_path):
+        root = tmp_path / "classes"
+        (root / "cat").mkdir(parents=True)
+        (root / "cat" / "img.tiff").write_bytes(b"not really a tiff")
+        dataset = CustomImageFolder(root=str(root))
+        with pytest.raises(ValueError, match="extension"):
+            dataset[0]
 
 
 if __name__ == "__main__":
