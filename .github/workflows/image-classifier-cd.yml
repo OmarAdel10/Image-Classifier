@@ -5,19 +5,46 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 jobs:
-  release:
-    name: Build and release
+  tag-on-master:
+    name: Verify tag is on master
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'OmarAdel10'
+    outputs:
+      is_master: ${{ steps.check.outputs.is_master }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+
+      - name: Check tag ancestry against origin/master
+        id: check
+        run: |
+          git fetch origin master --depth=1
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "is_master=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_master=false" >> $GITHUB_OUTPUT
+          fi
+
+  release:
+    name: Build and release
+    needs: tag-on-master
+    if: needs.tag-on-master.outputs.is_master == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
 
       - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
         with:
           flutter-version: '3.47.6'
           channel: 'stable'
@@ -25,25 +52,31 @@ jobs:
       - name: Get Flutter dependencies
         run: flutter pub get
 
+      - name: Static analysis
+        run: flutter analyze --fatal-infos
+
+      - name: Run tests
+        run: flutter test
+
       - name: Verify build (debug APK)
         run: flutter build apk --debug
 
       - name: Build release APK
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release
 
       - name: Extract tag name
         id: tag
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: Release ${{ steps.tag.outputs.tag }}
           body: |
             Automated release from tag ${{ steps.tag.outputs.tag }}.
             Built with Flutter 3.47.6 (stable).
-          draft: false
+          draft: true
           prerelease: false
           files: |
             build/app/outputs/flutter-apk/app-release.apk
