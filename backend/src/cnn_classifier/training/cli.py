@@ -5,9 +5,8 @@ import logging
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 
-from cnn_classifier.config import Config, get_config
+from cnn_classifier.config import Config
 from cnn_classifier.data import get_dataloaders
 from cnn_classifier.models import get_model
 from cnn_classifier.training.evaluate import evaluate, save_classification_report
@@ -75,6 +74,11 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
                 break
     logger.info("training done: best val acc %.4f at epoch %d", best_val_acc, best_epoch)
 
+    # Report metrics for the saved best checkpoint, not the final weights.
+    if config.model_path_resolved.exists():
+        best_state = torch.load(config.model_path_resolved, weights_only=True)
+        model.load_state_dict(best_state["model_state"])
+
     # Spec artifacts: evaluate on the held-out test set and persist the
     # class names alongside the checkpoint (plan lines 357-359).
     test_metrics = evaluate(model, test_loader, config.device, config.class_names)
@@ -86,4 +90,4 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
     logger.info("saved labels.json and classification_report.json")
 
 
-__all__ = ["run_training", "get_config", "DataLoader"]
+__all__ = ["run_training"]

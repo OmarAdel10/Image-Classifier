@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import sys
 
 import pytest
@@ -60,7 +61,7 @@ class TestTrainOneEpoch:
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         crit = torch.nn.CrossEntropyLoss()
         metrics = train_one_epoch(model, loader, opt, crit, "cpu")
-        assert torch.isfinite(torch.tensor(metrics["loss"]))
+        assert math.isfinite(metrics["loss"])
         assert 0.0 <= metrics["acc"] <= 1.0
 
     def test_train_one_epoch_clips_and_steps(self):
@@ -195,7 +196,7 @@ class TestCheckpoint:
         save_checkpoint(
             ckpt_path, model, opt, epoch=3, best_val_acc=0.42, config=cfg, class_names=CLASS_NAMES
         )
-        checkpoint = torch.load(ckpt_path, weights_only=False)
+        checkpoint = torch.load(ckpt_path, weights_only=True)
         assert {
             "model_state",
             "optimizer_state",
@@ -207,6 +208,12 @@ class TestCheckpoint:
         assert checkpoint["epoch"] == 3
         assert checkpoint["best_val_acc"] == 0.42
         assert checkpoint["class_names"] == CLASS_NAMES
+        assert checkpoint["config"] == {
+            "input_size": (32, 32),
+            "seed": cfg.seed,
+            "device": "cpu",
+            "batch_size": 2,
+        }
         head_weight = model.head[-1].weight.detach()
         restored = checkpoint["model_state"]["head.4.weight"]
         assert torch.equal(head_weight, restored)
@@ -225,7 +232,7 @@ class TestScriptEntryPoints:
         assert args.model_name == "cnn_scratch"
 
     def test_train_transfer_script_defaults(self):
-        """train_transfer defaults: resnet18, lr 1e-4, input size 224."""
+        """train_transfer defaults: resnet18, lr 1e-4, input size 32x32."""
         from scripts.train_transfer import parse_args
 
         args = parse_args([])
@@ -256,7 +263,8 @@ class _AlwaysZero(nn.Module):
 class TestRunTraining:
     """Tests for the run_training orchestrator (normal + early stop)."""
 
-    def _install_stubs(self, monkeypatch, tmp_path):
+    @staticmethod
+    def _install_stubs(monkeypatch, tmp_path):
         """Point config paths at tmp_path and stub model/data loaders."""
         from cnn_classifier.training import cli as cli_module
 
@@ -279,7 +287,7 @@ class TestRunTraining:
             run_training(cfg, "stub", epochs=2, lr=1e-3)
         ckpt_path = tmp_path / "checkpoints" / "best_model.pt"
         assert ckpt_path.exists()
-        ckpt = torch.load(ckpt_path, weights_only=False)
+        ckpt = torch.load(ckpt_path, weights_only=True)
         assert ckpt["epoch"] == 1
         assert ckpt["best_val_acc"] == 1.0
         assert stub.moved_to == ["cpu"]
@@ -298,7 +306,7 @@ class TestRunTraining:
         assert "early stopping at epoch 11" in caplog.text
         ckpt_path = tmp_path / "checkpoints" / "best_model.pt"
         assert ckpt_path.exists()
-        ckpt = torch.load(ckpt_path, weights_only=False)
+        ckpt = torch.load(ckpt_path, weights_only=True)
         assert ckpt["epoch"] == 1
 
     def test_cosine_lr_and_checkpoint_overwrite(self, tmp_path, monkeypatch, caplog):
@@ -323,7 +331,7 @@ class TestRunTraining:
             run_training(cfg, "stub", epochs=3, lr=1e-3)
         assert captured_lrs == pytest.approx([7.5e-4, 2.5e-4, 0.0])
         assert captured_lrs[0] > captured_lrs[1] > captured_lrs[2]
-        ckpt = torch.load(tmp_path / "checkpoints" / "best_model.pt", weights_only=False)
+        ckpt = torch.load(tmp_path / "checkpoints" / "best_model.pt", weights_only=True)
         assert ckpt["epoch"] == 3
         assert ckpt["best_val_acc"] == pytest.approx(0.9)
         assert "training done: best val acc 0.9000 at epoch 3" in caplog.text
@@ -521,7 +529,7 @@ class TestReportAndCheckpointExtras:
         save_checkpoint(
             path, model, opt, epoch=1, best_val_acc=0.5, config=cfg, class_names=CLASS_NAMES
         )
-        ckpt = torch.load(path, weights_only=False)
+        ckpt = torch.load(path, weights_only=True)
         fresh = torch.optim.AdamW(get_model("cnn_scratch", cfg).parameters(), lr=1e-3)
         fresh.load_state_dict(ckpt["optimizer_state"])
         fresh.step()
@@ -537,12 +545,6 @@ class TestScriptDefaults:
         assert args.epochs == 30
         assert args.lr == pytest.approx(1e-3)
         assert args.model_name == "cnn_scratch"
-
-    def test_train_transfer_custom_input_size(self):
-        from scripts.train_transfer import parse_args
-
-        args = parse_args(["--input-size", "64", "64"])
-        assert args.input_size == (64, 64)
 
 
 class TestCliMains:
@@ -595,28 +597,179 @@ class TestCliMains:
         assert calls[0][1] == 30
         assert calls[0][2] == pytest.approx(1e-4)
 
-    def test_train_transfer_main_custom_input_size(self, monkeypatch):
-        import cnn_classifier.config as config_module
-        import scripts.train_transfer as transfer_module
-        from scripts.train_transfer import main
 
-        kwargs_seen = []
+class TestFixRoundTwoSecurity:
+    """Fix-round-2 security + robustness tests (H1/H2/H4/row-10)."""
+
+    def test_checkpoint_config_is_primitives_dict(self, tmp_path):
+        """Checkpoint config payload is a JSON-safe dict (weights_only=True safe)."""
+        import torch
+
+        from cnn_classifier.config import Config
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        path = tmp_path / "ckpt.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, cfg, CLASS_NAMES)
+        ckpt = torch.load(path, weights_only=True)
+        assert ckpt["config"] == {
+            "input_size": (32, 32),
+            "seed": cfg.seed,
+            "device": "cpu",
+            "batch_size": 2,
+        }
+
+    def test_report_uses_best_checkpoint(self, tmp_path, monkeypatch, caplog):
+        """Post-loop evaluate runs on the reloaded BEST checkpoint, not final weights."""
+        import logging
+
+        import torch
+
+        from cnn_classifier.training import cli as cli_module
+        from cnn_classifier.training.cli import run_training
+
+        with caplog.at_level(logging.INFO, logger="cnn_classifier.training.cli"):
+            cfg, stub = TestRunTraining._install_stubs(monkeypatch, tmp_path)
+            accs = iter([0.5, 0.9, 0.4])
+            monkeypatch.setattr(
+                cli_module,
+                "validate",
+                lambda model, loader, criterion, device: {"loss": 0.1, "acc": next(accs)},
+            )
+            real_evaluate = cli_module.evaluate
+            captured = {}
+
+            def spy_evaluate(model, loader, device, names):
+                captured["model"] = model
+                return real_evaluate(model, loader, device, names)
+
+            monkeypatch.setattr(cli_module, "evaluate", spy_evaluate)
+            run_training(cfg, "stub", epochs=3, lr=1e-3)
+
+        ckpt = torch.load(tmp_path / "checkpoints" / "best_model.pt", weights_only=True)
+        assert ckpt["epoch"] == 2
+        assert ckpt["best_val_acc"] == 0.9
+        best_bias = ckpt["model_state"]["bias"]
+        assert captured["model"].state_dict()["bias"] == best_bias
+        assert (tmp_path / "checkpoints" / "classification_report.json").exists()
+
+    def test_train_transfer_input_size_must_be_32(self):
+        """--input-size values other than 32 32 fail fast with a clear error."""
+        from scripts import train_transfer
+
+        with pytest.raises(SystemExit):
+            train_transfer.parse_args(["--input-size", "64", "64"])
+
+    def test_epochs_must_be_positive(self):
+        """--epochs 0 (or negative) is rejected by argparse."""
+        from scripts import train_scratch
+
+        with pytest.raises(SystemExit):
+            train_scratch.parse_args(["--epochs", "0"])
+        with pytest.raises(SystemExit):
+            train_scratch.parse_args(["--epochs", "-5"])
+
+    def test_lr_must_be_positive(self):
+        """--lr 0 (or negative) is rejected by argparse."""
+        from scripts import train_transfer
+
+        with pytest.raises(SystemExit):
+            train_transfer.parse_args(["--lr", "0"])
+        with pytest.raises(SystemExit):
+            train_transfer.parse_args(["--lr", "-1e-3"])
+
+
+class TestFixRoundTwoBehavioral:
+    """Coverage-reviewer Priority-1 behavioral tests."""
+
+    def test_train_one_epoch_exact_metrics_and_types(self):
+        """Metrics are exact floats: acc==1.0, loss==CE(all-zero logits)."""
+        import math
+
+        import torch
+
+        from cnn_classifier.training.train import train_one_epoch
+
+        model = _AlwaysZero()
+        loader = [(torch.randn(2, 3, 32, 32), torch.zeros(2, dtype=torch.long))]
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        crit = torch.nn.CrossEntropyLoss()
+        metrics = train_one_epoch(model, loader, opt, crit, "cpu")
+        assert metrics["acc"] == 1.0
+        expected_loss = math.log(1 + 9 * math.exp(-10.0))
+        assert metrics["loss"] == pytest.approx(expected_loss, abs=1e-6)
+        assert isinstance(metrics["loss"], float)
+        assert isinstance(metrics["acc"], float)
+
+    def test_validate_exact_metrics_and_types(self):
+        """validate returns exact floats with the same closed-form loss."""
+        import math
+
+        import torch
+
+        from cnn_classifier.training.train import validate
+
+        model = _AlwaysZero()
+        loader = [(torch.randn(2, 3, 32, 32), torch.zeros(2, dtype=torch.long))]
+        crit = torch.nn.CrossEntropyLoss()
+        metrics = validate(model, loader, crit, "cpu")
+        assert metrics["acc"] == 1.0
+        expected_loss = math.log(1 + 9 * math.exp(-10.0))
+        assert metrics["loss"] == pytest.approx(expected_loss, abs=1e-6)
+        assert isinstance(metrics["loss"], float)
+        assert isinstance(metrics["acc"], float)
+
+    def test_run_training_epochs_zero(self, tmp_path, monkeypatch, caplog):
+        """epochs=0: no checkpoint, but labels.json + report still written."""
+        import logging
+
+        from cnn_classifier.training.cli import run_training
+
+        with caplog.at_level(logging.INFO, logger="cnn_classifier.training.cli"):
+            cfg, _stub = TestRunTraining._install_stubs(monkeypatch, tmp_path)
+            run_training(cfg, "stub", epochs=0, lr=1e-3)
+
+        assert not (tmp_path / "checkpoints" / "best_model.pt").exists()
+        assert (tmp_path / "checkpoints" / "labels.json").exists()
+        assert (tmp_path / "checkpoints" / "classification_report.json").exists()
+        assert "best val acc 0.0000 at epoch 0" in caplog.text
+
+    def test_training_reexports(self):
+        """cnn_classifier.training re-exports all 5 public names, each callable."""
+
+        import cnn_classifier.training as training_pkg
+
+        for name in (
+            "train_one_epoch",
+            "validate",
+            "evaluate",
+            "save_checkpoint",
+            "save_classification_report",
+        ):
+            obj = getattr(training_pkg, name)
+            assert callable(obj), name
+
+    def test_run_training_seeds_rng(self, tmp_path, monkeypatch):
+        """run_training seeds torch.manual_seed with config.seed."""
+        import torch
+
+        from cnn_classifier.training.cli import run_training
+
+        cfg, _stub = TestRunTraining._install_stubs(monkeypatch, tmp_path)
         calls = []
+        real_seed = torch.manual_seed
+        monkeypatch.setattr(torch, "manual_seed", lambda s: calls.append(s) or real_seed(s))
+        run_training(cfg, "stub", epochs=1, lr=1e-3)
+        assert cfg.seed in calls
 
-        def fake_config(**kwargs):
-            kwargs_seen.append(kwargs)
-            return object()
+    def test_enforce_frozen_backbone_no_backbone_noop(self):
+        """Models without a backbone attribute are left unchanged."""
+        from cnn_classifier.training.train import _enforce_frozen_backbone_eval
 
-        monkeypatch.setattr(sys, "argv", ["train_transfer.py", "--input-size", "64", "64"])
-        monkeypatch.setattr(config_module, "Config", fake_config)
-        monkeypatch.setattr(
-            transfer_module,
-            "run_training",
-            lambda config, name, epochs, lr: calls.append((name, epochs, lr)),
-        )
-        main()
-        assert kwargs_seen == [{"input_size": (64, 64)}]
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        model.train()
+        _enforce_frozen_backbone_eval(model)
+        assert model.training is True

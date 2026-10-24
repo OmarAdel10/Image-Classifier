@@ -127,7 +127,12 @@ def save_checkpoint(
             "optimizer_state": optimizer.state_dict(),
             "epoch": epoch,
             "best_val_acc": best_val_acc,
-            "config": config,
+            "config": {
+                "input_size": tuple(config.input_size),
+                "seed": config.seed,
+                "device": config.device,
+                "batch_size": config.batch_size,
+            },
             "class_names": list(class_names),
         },
         path,

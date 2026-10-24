@@ -1,1 +1,1 @@
-"""Pytest root conftest: puts backend/ on sys.path so `scripts.*` imports work."""
+"""Pytest inserts backend/ on sys.path via the pythonpath option in pyproject.toml, making the scripts package importable."""
