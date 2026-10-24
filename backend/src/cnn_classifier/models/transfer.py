@@ -18,7 +18,12 @@ _HEAD_FEATURES = {"resnet18": 512, "vgg16": 4096}
 
 
 class TransferModel(nn.Module):
-    """Pretrained torchvision backbone with a task-specific head."""
+    """Pretrained torchvision backbone with a task-specific head.
+
+    Note: freezing parameters does not stop BatchNorm running stats from
+    updating in train mode (resnet18); training code must call
+    ``model.eval()`` while the backbone is frozen (feature-extractor phase).
+    """
 
     def __init__(
         self,

@@ -2,13 +2,14 @@
 
 import pytest
 import torch
+import torch.nn as nn
 
 from cnn_classifier.config import Config
-from cnn_classifier.models import CNNScratch, TransferModel, get_model
+from cnn_classifier.models import MODEL_REGISTRY, CNNScratch, TransferModel, get_model
 
 
 class TestCNNScratch:
-    """Tests for the from-scratch CNN (cifar_scratch architecture)."""
+    """Tests for the from-scratch CNN (cnn_scratch architecture)."""
 
     def test_cnn_scratch_forward(self):
         """Spec test: forward pass through CNNScratch produces (2, 10) logits, not NaN."""
@@ -42,6 +43,53 @@ class TestCNNScratch:
         """Input smaller than the two max-pools (4x downsampling) is rejected."""
         with pytest.raises(ValueError, match="too small"):
             CNNScratch(Config(input_size=(2, 2)))
+
+    def test_cnn_scratch_width_too_small_raises(self):
+        """Width below one pool step is rejected (height operand tested above)."""
+        with pytest.raises(ValueError, match="too small"):
+            CNNScratch(Config(input_size=(32, 2)))
+
+    def test_cnn_scratch_flatten_too_large_raises(self):
+        """Oversized input (flattened size > 65,536) is rejected before Linear."""
+        with pytest.raises(ValueError, match="too large"):
+            CNNScratch(Config(input_size=(256, 256)))
+
+    @pytest.mark.parametrize("size", [(37, 29), (4, 4), (128, 128)])
+    def test_cnn_scratch_non_default_input_sizes(self, size):
+        """Dynamic flatten handles odd/mixed and boundary sizes (128,128 == cap)."""
+        cfg = Config(input_size=size, device="cpu")
+        model = get_model("cnn_scratch", cfg)
+        model.eval()
+        x = torch.randn(2, 3, *size)
+        with torch.no_grad():
+            logits = model(x)
+        assert logits.shape == (2, 10)
+        assert torch.isfinite(logits).all()
+
+    def test_cnn_scratch_head_has_dropout(self):
+        """Head pins the spec architecture: Dropout(0.5) between FC layers."""
+        cfg = Config(input_size=(32, 32), device="cpu")
+        model = CNNScratch(cfg)
+        dropout = model.head[3]
+        assert isinstance(dropout, nn.Dropout)
+        assert dropout.p == 0.5
+
+    def test_cnn_scratch_kaiming_init_applied(self):
+        """Kaiming init zeroes biases; PyTorch default init leaves them nonzero."""
+        cfg = Config(input_size=(32, 32), device="cpu")
+        model = CNNScratch(cfg)
+        checked_conv = 0
+        checked_linear = 0
+        for module in model.modules():
+            if isinstance(module, (nn.Conv2d, nn.Linear)):
+                assert module.weight.abs().sum() > 0
+                assert module.bias.eq(0).all()
+                if isinstance(module, nn.Conv2d):
+                    checked_conv += 1
+                else:
+                    checked_linear += 1
+        assert checked_conv >= 2
+        assert checked_linear >= 2
 
 
 class TestTransferModelResNet18:
@@ -109,13 +157,34 @@ class TestTransferModelVGG16:
         backbone_frozen = all(
             not p.requires_grad
             for n, p in model.backbone.named_parameters()
-            if "classifier.6" not in n
+            if not n.startswith("classifier.6.")
         )
         head_trainable = all(
-            p.requires_grad for n, p in model.backbone.named_parameters() if "classifier.6" in n
+            p.requires_grad
+            for n, p in model.backbone.named_parameters()
+            if n.startswith("classifier.6.")
         )
         assert backbone_frozen
         assert head_trainable
+
+    def test_vgg16_forward_with_random_weights(self):
+        """VGG16 random-init forward produces (2, 10) finite logits via 4096-dim head."""
+        cfg = Config(input_size=(224, 224), device="cpu")
+        model = TransferModel("vgg16", cfg, pretrained=False)
+        model.eval()
+        assert model.backbone.classifier[6].in_features == 4096
+        x = torch.randn(2, 3, 64, 64)  # AdaptiveAvgPool accepts >= 32; faster than 224
+        with torch.no_grad():
+            logits = model(x)
+        assert logits.shape == (2, 10)
+        assert torch.isfinite(logits).all()
+
+    def test_vgg16_unfreeze_backbone(self):
+        """unfreeze_backbone() re-enables gradients on every VGG16 parameter."""
+        cfg = Config(input_size=(224, 224), device="cpu")
+        model = TransferModel("vgg16", cfg, pretrained=False)
+        model.unfreeze_backbone()
+        assert all(p.requires_grad for p in model.backbone.parameters())
 
 
 class TestModelRegistry:
@@ -127,10 +196,28 @@ class TestModelRegistry:
         with pytest.raises(ValueError, match="unknown model"):
             get_model("nonexistent_model", cfg)
 
-    def test_cnn_scratch_kaiming_init_applied(self):
-        """Kaiming normal init: conv/linear weights are non-zero and not default."""
-        cfg = Config(input_size=(32, 32), device="cpu")
-        model = CNNScratch(cfg)
-        first_conv_weight = model.features[0].weight
-        assert first_conv_weight.abs().sum() > 0
-        assert first_conv_weight.std() > 0.01
+    def test_registry_vgg16_lambda_constructs_transfer_model(self, monkeypatch):
+        """MODEL_REGISTRY['vgg16'] wiring builds TransferModel('vgg16', config)."""
+        import cnn_classifier.models.registry as registry_module
+
+        recorded = []
+
+        def record(arch_name, config):
+            recorded.append((arch_name, config))
+            return object()
+
+        monkeypatch.setattr(registry_module, "TransferModel", record)
+        cfg = Config(input_size=(224, 224), device="cpu")
+        MODEL_REGISTRY["vgg16"](cfg)
+        assert recorded == [("vgg16", cfg)]
+
+    def test_models_all_matches_public_names(self):
+        """Package __all__ exports exactly the public model surface."""
+        import cnn_classifier.models as models_package
+
+        assert set(models_package.__all__) == {
+            "CNNScratch",
+            "TransferModel",
+            "get_model",
+            "MODEL_REGISTRY",
+        }

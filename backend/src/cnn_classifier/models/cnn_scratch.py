@@ -16,6 +16,11 @@ from cnn_classifier.config import Config
 # Spatial downsampling applied by the two MaxPool(2) layers.
 _DOWNSAMPLE = 4
 
+# Upper bound on the flattened feature count (memory guard: the FC head
+# allocates ~2048 fp32 params per input pixel, so Config-legal sizes like
+# 1414x1414 would request ~16GB at construction).
+_MAX_FLATTEN = 65_536
+
 
 class CNNScratch(nn.Module):
     """Small from-scratch CNN for CIFAR-10 (32x32 RGB, 10 classes)."""
@@ -46,6 +51,11 @@ class CNNScratch(nn.Module):
             nn.MaxPool2d(2),
         )
         flatten_size = 64 * (height // _DOWNSAMPLE) * (width // _DOWNSAMPLE)
+        if flatten_size > _MAX_FLATTEN:
+            raise ValueError(
+                f"input_size {config.input_size} too large for CNNScratch "
+                f"(flattened size {flatten_size} exceeds {_MAX_FLATTEN})"
+            )
         self.head = nn.Sequential(
             nn.Flatten(),
             nn.Linear(flatten_size, 512),
