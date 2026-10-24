@@ -1,6 +1,7 @@
 """Tests for cnn_classifier.data (CIFAR-10 loaders + CustomImageFolder)."""
 
 import os
+import struct
 
 import pytest
 import torch
@@ -203,6 +204,26 @@ class TestGetDataloaders:
         with pytest.raises(ValueError, match="val_ratio"):
             get_dataloaders(cfg, data_dir=cifar_data_dir, val_ratio=1.0)
 
+    def test_wrapper_val_ratio_zero_yields_empty_val(self, monkeypatch, tmp_path):
+        """Wrapper-level val_ratio=0.0: val loader dataset is empty (hermetic)."""
+        from cnn_classifier.data import dataset as dataset_module
+
+        class FakeCIFAR10:
+            def __init__(self, root, train, download, transform):
+                self.targets = [0] * 10 + [1] * 10
+
+            def __getitem__(self, idx):
+                return torch.zeros(3, 32, 32), 0
+
+            def __len__(self):
+                return 20
+
+        monkeypatch.setattr(dataset_module.datasets, "CIFAR10", FakeCIFAR10)
+        monkeypatch.setattr(dataset_module, "_get_project_root", lambda: tmp_path)
+        cfg = Config(batch_size=4, num_workers=0)
+        _, val_loader, _ = get_dataloaders(cfg, val_ratio=0.0)
+        assert len(val_loader.dataset) == 0
+
     def test_input_size_must_be_32x32(self, cifar_data_dir):
         """Loaders fail fast on non-CIFAR input sizes (eval has no Resize)."""
         cfg = Config(input_size=(64, 64), batch_size=4, num_workers=0)
@@ -342,15 +363,55 @@ class TestSafeLoader:
             dataset[0]
 
     def test_symlinked_class_dir_rejected(self, tmp_path):
-        """MED-1 regression: symlinked class dirs cannot pull outside-root images."""
+        """MED-1 regression: symlinked class dirs are rejected at scan time
+        (before the directory walk can follow them outside the root)."""
         outside = tmp_path / "outside"
         outside.mkdir()
         Image.new("RGB", (32, 32), color=(5, 5, 5)).save(outside / "img.jpg")
         root = tmp_path / "classes"
         root.mkdir()
         (root / "cat").symlink_to(outside)
+        with pytest.raises(ValueError, match="symlinked class directory"):
+            CustomImageFolder(root=str(root))
+
+    def test_symlinked_class_dir_cycle_rejected(self, tmp_path):
+        """HIGH-1 regression: back-pointing class-dir symlinks (cycle) are
+        rejected quickly at scan instead of hanging the walk forever."""
+        root = tmp_path / "classes"
+        root.mkdir()
+        (root / "a").symlink_to(root)
+        (root / "b").symlink_to(root)
+        with pytest.raises(ValueError, match="symlinked class directory"):
+            CustomImageFolder(root=str(root))
+
+    def test_self_loop_class_dir_rejected(self, tmp_path):
+        """HIGH-1 regression (mild form): a class dir looping back to root is
+        rejected at scan instead of silently inflating len() via the walk."""
+        root = tmp_path / "classes"
+        root.mkdir()
+        (root / "loop").symlink_to(root)
+        with pytest.raises(ValueError, match="symlinked class directory"):
+            CustomImageFolder(root=str(root))
+
+    def test_outside_root_leaf_symlink_rejected(self, tmp_path):
+        """MED-1 containment regression: a leaf symlink pointing outside the
+        dataset root passes scan (stat follows links, so S_ISREG is True) and
+        is rejected by the post-init containment check."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        Image.new("RGB", (32, 32), color=(7, 7, 7)).save(outside / "real.jpg")
+        root = tmp_path / "classes"
+        (root / "cat").mkdir(parents=True)
+        (root / "cat" / "escape.jpg").symlink_to(outside / "real.jpg")
         with pytest.raises(ValueError, match="escapes dataset root"):
             CustomImageFolder(root=str(root))
+
+    def test_is_regular_file_missing_path_returns_false(self, tmp_path):
+        """_is_regular_file returns False when os.stat fails (vanished file),
+        covering the OSError branch of the regular-file check."""
+        from cnn_classifier.data.custom_dataset import _is_regular_file
+
+        assert _is_regular_file(str(tmp_path / "missing.jpg")) is False
 
     def test_disallowed_extension_excluded_at_scan(self, tmp_path):
         """MED-2: scan-time allowlist — a class dir whose only files are
@@ -372,6 +433,50 @@ class TestSafeLoader:
         assert len(dataset) == 1
         img, _ = dataset[0]  # iteration works, no abort
         assert img.shape == (3, 32, 32)
+
+    def test_fifo_image_rejected(self, tmp_path):
+        """MED-4 regression: special files (FIFOs) are excluded at scan and
+        rejected by the loader instead of blocking Image.open forever."""
+        from cnn_classifier.data import custom_dataset as custom_dataset_module
+
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        Image.new("RGB", (32, 32), color=(7, 7, 7)).save(cat / "valid.jpg")
+        os.mkfifo(cat / "pipe.jpg")
+        # Scan excludes the FIFO: len() counts only the regular file.
+        dataset = CustomImageFolder(root=str(tmp_path))
+        assert len(dataset) == 1
+        # Loader guard (defense-in-depth) rejects it directly too.
+        with pytest.raises(ValueError, match="not a regular image file"):
+            custom_dataset_module._safe_loader(str(cat / "pipe.jpg"))
+
+    def test_truncated_image_raises_value_error(self, tmp_path):
+        """MED-3 regression: a header-valid but tail-truncated image raises
+        the module ValueError contract, not a raw OSError from convert."""
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        full = tmp_path / "full.jpg"
+        Image.new("RGB", (64, 64), color=(3, 3, 3)).save(full)
+        data = full.read_bytes()
+        (cat / "cut.jpg").write_bytes(data[: len(data) - 20])
+        dataset = CustomImageFolder(root=str(tmp_path))
+        with pytest.raises(ValueError, match="unreadable image file"):
+            dataset[0]
+
+    def test_decompression_bomb_raises_value_error(self, tmp_path):
+        """MED-3 regression: a header-declared bomb (beyond PIL's own limit)
+        raises the module ValueError contract, not a raw DecompressionBombError."""
+        cat = tmp_path / "cat"
+        cat.mkdir()
+        full = tmp_path / "full.png"
+        Image.new("RGB", (16, 16)).save(full)
+        bomb = bytearray(full.read_bytes())
+        # Patch IHDR width/height (big-endian u32 pair at offset 16) to 50000x50000.
+        bomb[16:24] = struct.pack(">II", 50000, 50000)
+        (cat / "bomb.png").write_bytes(bytes(bomb))
+        dataset = CustomImageFolder(root=str(tmp_path))
+        with pytest.raises(ValueError, match="unreadable image file"):
+            dataset[0]
 
     def test_uppercase_extension_loads(self, tmp_path):
         """Case-insensitive suffix handling: .JPG loads."""
@@ -423,6 +528,20 @@ class TestSafeLoader:
         loader = DataLoader(dataset, batch_size=2, num_workers=2)
         total = sum(x.shape[0] for x, _ in loader)
         assert total == 3
+
+
+class TestPackageExports:
+    """Package surface: __all__ matches the shipped public names exactly."""
+
+    def test_all_matches_public_names(self):
+        import cnn_classifier.data as data_pkg
+
+        assert set(data_pkg.__all__) == {
+            "CIFAR10_MEAN",
+            "CIFAR10_STD",
+            "CustomImageFolder",
+            "get_dataloaders",
+        }
 
 
 if __name__ == "__main__":
