@@ -95,10 +95,13 @@ jobs:
           mkdir -p /home/runner/.cache/cnn-cifar10
           cd /home/runner/.cache/cnn-cifar10
           # Self-heal: purge a corrupt or partial archive instead of
-          # failing forever on an immutable cache key.
-          if [ ! -f cifar-10-python.tar.gz ] || ! md5sum -c <<< 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz'; then
+          # failing forever on an immutable cache key. Purge on EITHER
+          # hash mismatch (md5 or sha256).
+          if [ ! -f cifar-10-python.tar.gz ] \
+             || ! md5sum -c <<< 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' \
+             || ! sha256sum -c <<< '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz'; then
             rm -f cifar-10-python.tar.gz
-            wget -c --tries=3 --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+            wget --tries=3 --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
           fi
           echo 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' | md5sum -c -
           echo '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz' | sha256sum -c -
