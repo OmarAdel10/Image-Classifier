@@ -55,7 +55,7 @@ jobs:
   python-backend:
     name: Python Backend CI
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 45  # first run downloads CIFAR-10 (~170MB); cached runs ~5 min
     permissions:
       contents: read
     steps:
@@ -83,6 +83,31 @@ jobs:
         working-directory: backend
         run: black --check src/ tests/
 
+      - name: Cache CIFAR-10 dataset
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: /home/runner/.cache/cnn-cifar10
+          key: cifar10-python-md5-c58f3010
+          restore-keys: cifar10-python-
+
+      - name: Download and verify CIFAR-10 (self-healing cache)
+        run: |
+          mkdir -p /home/runner/.cache/cnn-cifar10
+          cd /home/runner/.cache/cnn-cifar10
+          # Self-heal: purge a corrupt or partial archive instead of
+          # failing forever on an immutable cache key. Purge on EITHER
+          # hash mismatch (md5 or sha256).
+          if [ ! -f cifar-10-python.tar.gz ] \
+             || ! md5sum -c <<< 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' \
+             || ! sha256sum -c <<< '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz'; then
+            rm -f cifar-10-python.tar.gz
+            wget --tries=3 --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+          fi
+          echo 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' | md5sum -c -
+          echo '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz' | sha256sum -c -
+
       - name: Run tests (pytest)
         working-directory: backend
+        env:
+          CNN_TEST_DATA_DIR: /home/runner/.cache/cnn-cifar10
         run: python -m pytest tests/ -v
