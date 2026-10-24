@@ -1,5 +1,6 @@
 """Shared training-run logic for the CLI entry points."""
 
+import json
 import logging
 
 import torch
@@ -9,6 +10,7 @@ from torch.utils.data import DataLoader
 from cnn_classifier.config import Config, get_config
 from cnn_classifier.data import get_dataloaders
 from cnn_classifier.models import get_model
+from cnn_classifier.training.evaluate import evaluate, save_classification_report
 from cnn_classifier.training.train import save_checkpoint, train_one_epoch, validate
 
 logger = logging.getLogger(__name__)
@@ -27,8 +29,8 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
         lr: Optimizer learning rate.
     """
     torch.manual_seed(config.seed)
-    train_loader, val_loader, _ = get_dataloaders(config)
-    model = get_model(model_name, config)
+    train_loader, val_loader, test_loader = get_dataloaders(config)
+    model = get_model(model_name, config).to(config.device)
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
@@ -72,6 +74,16 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
                 )
                 break
     logger.info("training done: best val acc %.4f at epoch %d", best_val_acc, best_epoch)
+
+    # Spec artifacts: evaluate on the held-out test set and persist the
+    # class names alongside the checkpoint (plan lines 357-359).
+    test_metrics = evaluate(model, test_loader, config.device, config.class_names)
+    save_classification_report(
+        test_metrics, config.model_path_resolved.parent / "classification_report.json"
+    )
+    config.labels_path_resolved.parent.mkdir(parents=True, exist_ok=True)
+    config.labels_path_resolved.write_text(json.dumps(config.class_names))
+    logger.info("saved labels.json and classification_report.json")
 
 
 __all__ = ["run_training", "get_config", "DataLoader"]

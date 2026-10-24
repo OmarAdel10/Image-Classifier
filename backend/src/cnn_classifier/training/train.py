@@ -8,11 +8,11 @@ backbone is switched to ``eval()`` inside ``train_one_epoch`` so BatchNorm
 running statistics stay frozen while the head trains.
 """
 
+from collections.abc import Iterable
 from pathlib import Path
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 
 from cnn_classifier.config import Config
 
@@ -37,7 +37,7 @@ def _enforce_frozen_backbone_eval(model: nn.Module) -> None:
 
 def train_one_epoch(
     model: nn.Module,
-    loader: DataLoader,
+    loader: Iterable[tuple[torch.Tensor, torch.Tensor]],
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
     device: str,
@@ -78,7 +78,7 @@ def train_one_epoch(
 
 def validate(
     model: nn.Module,
-    loader: DataLoader,
+    loader: Iterable[tuple[torch.Tensor, torch.Tensor]],
     criterion: nn.Module,
     device: str,
 ) -> dict:

@@ -8,11 +8,11 @@ persists the metrics dict as JSON.
 """
 
 import json
+from collections.abc import Iterable
 from pathlib import Path
 
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
 
 
 def _confusion_matrix(preds: list, labels: list, num_classes: int) -> list:
@@ -45,7 +45,7 @@ def _per_class_metrics(matrix: list, class_names: list) -> dict:
 
 def evaluate(
     model: nn.Module,
-    test_loader: DataLoader,
+    test_loader: Iterable[tuple[torch.Tensor, torch.Tensor]],
     device: str,
     class_names: list,
 ) -> dict:
