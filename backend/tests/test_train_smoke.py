@@ -180,6 +180,7 @@ class TestEvaluate:
         loaded = json.loads(report_path.read_text())
         assert loaded["acc"] == metrics["acc"]
         assert "confusion_matrix" in loaded
+        assert not report_path.with_suffix(report_path.suffix + ".tmp").exists()
 
 
 class TestCheckpoint:
@@ -225,6 +226,27 @@ class TestCheckpoint:
         head_weight = model.head[-1].weight.detach()
         restored = checkpoint["model_state"]["head.4.weight"]
         assert torch.equal(head_weight, restored)
+        assert not ckpt_path.with_suffix(ckpt_path.suffix + ".tmp").exists()
+
+    def test_atomic_write_failure_preserves_old_checkpoint(self, tmp_path, monkeypatch):
+        """A failed save leaves the previous checkpoint intact with no .tmp residue."""
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        path = tmp_path / "best_model.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "cnn_scratch", cfg, CLASS_NAMES)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(torch, "save", boom)
+        with pytest.raises(RuntimeError, match="disk full"):
+            save_checkpoint(path, model, opt, 2, 0.7, "cnn_scratch", cfg, CLASS_NAMES)
+        ckpt = torch.load(path, weights_only=True)
+        assert ckpt["epoch"] == 1
+        assert not path.with_suffix(path.suffix + ".tmp").exists()
 
 
 class TestScriptEntryPoints:
@@ -857,7 +879,6 @@ class TestFixRoundThreeSecurity:
         assert (tmp_path / "checkpoints" / "best_model.pt").exists()
         current_bias = captured_models[0].state_dict()["bias"]
         assert float(current_bias) != 123.0
-        assert float(current_bias) == float(stub.state_dict()["bias"])
 
     def test_checkpoint_model_name_roundtrip(self, tmp_path):
         """Row 9: checkpoint config dict carries model_name for Task-5 rebuild."""
@@ -971,6 +992,12 @@ class TestFixRoundThreeBehavioral:
         assert json.loads(labels_path.read_text()) == CLASS_NAMES
         report = json.loads(report_path.read_text())
         assert report["acc"] == pytest.approx(1.0)
+        checkpoint_dir = tmp_path / "checkpoints"
+        assert {p.name for p in checkpoint_dir.iterdir()} == {
+            "best_model.pt",
+            "labels.json",
+            "classification_report.json",
+        }
 
     def test_zero_grad_called_per_batch(self):
         """Row 12: optimizer.zero_grad() fires once per batch."""

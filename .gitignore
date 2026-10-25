@@ -55,3 +55,7 @@ backend/data/
 # Python test/build artifacts
 .coverage
 *.egg-info/
+
+# Training outputs and local secrets
+backend/checkpoints/
+backend/.env

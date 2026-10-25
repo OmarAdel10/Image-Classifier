@@ -9,7 +9,7 @@ from cnn_classifier.training.cli import run_training
 
 def _positive_int(value):
     number = int(value)
-    if not math.isfinite(number) or number <= 0:
+    if number <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return number
 

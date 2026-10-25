@@ -31,8 +31,8 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
     """
     torch.manual_seed(config.seed)
     random.seed(config.seed)
-    train_loader, val_loader, test_loader = get_dataloaders(config)
     model = get_model(model_name, config).to(config.device)
+    train_loader, val_loader, test_loader = get_dataloaders(config)
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
