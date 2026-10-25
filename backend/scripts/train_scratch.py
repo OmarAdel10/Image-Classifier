@@ -2,20 +2,21 @@
 
 import argparse
 import logging
+import math
 
 from cnn_classifier.training.cli import run_training
 
 
 def _positive_int(value):
     number = int(value)
-    if number <= 0:
+    if not math.isfinite(number) or number <= 0:
         raise argparse.ArgumentTypeError("must be a positive integer")
     return number
 
 
 def _positive_float(value):
     number = float(value)
-    if number <= 0:
+    if not math.isfinite(number) or number <= 0:
         raise argparse.ArgumentTypeError("must be a positive float")
     return number
 

@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import random
 
 import torch
 from torch import nn
@@ -28,14 +30,17 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
         lr: Optimizer learning rate.
     """
     torch.manual_seed(config.seed)
+    random.seed(config.seed)
     train_loader, val_loader, test_loader = get_dataloaders(config)
     model = get_model(model_name, config).to(config.device)
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     criterion = nn.CrossEntropyLoss()
+    class_names = config.class_names
 
     best_val_acc = 0.0
     best_epoch = 0
+    checkpoint_saved_this_run = False
     epochs_since_best = 0
     for epoch in range(1, epochs + 1):
         train_metrics = train_one_epoch(model, train_loader, optimizer, criterion, config.device)
@@ -59,9 +64,11 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
                 optimizer,
                 epoch,
                 best_val_acc,
+                model_name,
                 config,
-                config.class_names,
+                class_names,
             )
+            checkpoint_saved_this_run = True
             logger.info("saved best checkpoint (val acc %.4f)", best_val_acc)
         else:
             epochs_since_best += 1
@@ -75,18 +82,22 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
     logger.info("training done: best val acc %.4f at epoch %d", best_val_acc, best_epoch)
 
     # Report metrics for the saved best checkpoint, not the final weights.
-    if config.model_path_resolved.exists():
+    if checkpoint_saved_this_run:
         best_state = torch.load(config.model_path_resolved, weights_only=True)
         model.load_state_dict(best_state["model_state"])
 
     # Spec artifacts: evaluate on the held-out test set and persist the
     # class names alongside the checkpoint (plan lines 357-359).
-    test_metrics = evaluate(model, test_loader, config.device, config.class_names)
+    test_metrics = evaluate(model, test_loader, config.device, class_names)
     save_classification_report(
         test_metrics, config.model_path_resolved.parent / "classification_report.json"
     )
     config.labels_path_resolved.parent.mkdir(parents=True, exist_ok=True)
-    config.labels_path_resolved.write_text(json.dumps(config.class_names))
+    labels_tmp = config.labels_path_resolved.with_suffix(
+        config.labels_path_resolved.suffix + ".tmp"
+    )
+    labels_tmp.write_text(json.dumps(class_names))
+    os.replace(labels_tmp, config.labels_path_resolved)
     logger.info("saved labels.json and classification_report.json")
 
 

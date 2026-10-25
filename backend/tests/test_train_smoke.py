@@ -194,7 +194,14 @@ class TestCheckpoint:
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
         save_checkpoint(
-            ckpt_path, model, opt, epoch=3, best_val_acc=0.42, config=cfg, class_names=CLASS_NAMES
+            ckpt_path,
+            model,
+            opt,
+            epoch=3,
+            best_val_acc=0.42,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
         )
         checkpoint = torch.load(ckpt_path, weights_only=True)
         assert {
@@ -209,6 +216,7 @@ class TestCheckpoint:
         assert checkpoint["best_val_acc"] == 0.42
         assert checkpoint["class_names"] == CLASS_NAMES
         assert checkpoint["config"] == {
+            "model_name": "cnn_scratch",
             "input_size": (32, 32),
             "seed": cfg.seed,
             "device": "cpu",
@@ -527,7 +535,14 @@ class TestReportAndCheckpointExtras:
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         path = tmp_path / "best_model.pt"
         save_checkpoint(
-            path, model, opt, epoch=1, best_val_acc=0.5, config=cfg, class_names=CLASS_NAMES
+            path,
+            model,
+            opt,
+            epoch=1,
+            best_val_acc=0.5,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
         )
         ckpt = torch.load(path, weights_only=True)
         fresh = torch.optim.AdamW(get_model("cnn_scratch", cfg).parameters(), lr=1e-3)
@@ -612,9 +627,10 @@ class TestFixRoundTwoSecurity:
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         path = tmp_path / "ckpt.pt"
-        save_checkpoint(path, model, opt, 1, 0.5, cfg, CLASS_NAMES)
+        save_checkpoint(path, model, opt, 1, 0.5, "cnn_scratch", cfg, CLASS_NAMES)
         ckpt = torch.load(path, weights_only=True)
         assert ckpt["config"] == {
+            "model_name": "cnn_scratch",
             "input_size": (32, 32),
             "seed": cfg.seed,
             "device": "cpu",
@@ -772,4 +788,218 @@ class TestFixRoundTwoBehavioral:
         model = get_model("cnn_scratch", cfg)
         model.train()
         _enforce_frozen_backbone_eval(model)
+        assert model.training is True
+
+
+class TestFixRoundThreeSecurity:
+    """Fix-round-3: per-module frozen eval + stale-reload guard + validator gaps."""
+
+    def test_vgg16_head_dropout_stays_train(self):
+        """M1: per-module eval keeps head-feeding Dropout in train mode for vgg16."""
+        from cnn_classifier.models.transfer import TransferModel
+        from cnn_classifier.training.train import _enforce_frozen_backbone_eval
+
+        cfg = Config(input_size=(32, 32), device="cpu")
+        model = TransferModel("vgg16", cfg, pretrained=False)
+        model.train()
+        _enforce_frozen_backbone_eval(model)
+        assert model.backbone.classifier[2].training is True
+        assert model.backbone.classifier[5].training is True
+        assert model.backbone.classifier[6].training is True
+        for module in model.backbone.modules():
+            params = list(module.parameters())
+            if params and all(not prm.requires_grad for prm in params):
+                assert module.training is False
+        for module in model.backbone.modules():
+            if isinstance(module, torch.nn.BatchNorm2d):
+                assert module.training is False
+
+    def test_resnet_bn_still_frozen_after_per_module_eval(self):
+        """M1 regression: resnet18 BN modules remain eval under per-module loop."""
+        from cnn_classifier.models.transfer import TransferModel
+        from cnn_classifier.training.train import _enforce_frozen_backbone_eval
+
+        cfg = Config(input_size=(32, 32), device="cpu")
+        model = TransferModel("resnet18", cfg, pretrained=False)
+        model.train()
+        _enforce_frozen_backbone_eval(model)
+        assert model.backbone.bn1.training is False
+        assert model.backbone.fc.training is True
+
+    def test_stale_checkpoint_not_reloaded_on_zero_improvement(self, tmp_path, monkeypatch):
+        """Row 5: zero-improvement run must not reload a stale best_model.pt."""
+        from cnn_classifier.training import cli as cli_module
+        from cnn_classifier.training.cli import run_training
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg, stub = TestRunTraining._install_stubs(monkeypatch, tmp_path)
+        # Pre-create a stale best_model.pt from a DIFFERENT model (bias=123)
+        # so a reload would visibly overwrite the live weights.
+        stale = _AlwaysZero()
+        stale.bias = torch.nn.Parameter(torch.tensor(123.0))
+        stale_opt = torch.optim.AdamW(stale.parameters(), lr=1e-3)
+        save_checkpoint(cfg.model_path_resolved, stale, stale_opt, 1, 0.5, "stub", cfg, CLASS_NAMES)
+
+        monkeypatch.setattr(
+            cli_module,
+            "validate",
+            lambda model, loader, criterion, device: {"loss": 0.5, "acc": 0.0},
+        )
+        captured_models = []
+        real_evaluate = cli_module.evaluate
+
+        def spy_evaluate(model, loader, device, class_names):
+            captured_models.append(model)
+            return real_evaluate(model, loader, device, class_names)
+
+        monkeypatch.setattr(cli_module, "evaluate", spy_evaluate)
+        run_training(cfg, "stub", epochs=1, lr=1e-3)
+        assert (tmp_path / "checkpoints" / "best_model.pt").exists()
+        current_bias = captured_models[0].state_dict()["bias"]
+        assert float(current_bias) != 123.0
+        assert float(current_bias) == float(stub.state_dict()["bias"])
+
+    def test_checkpoint_model_name_roundtrip(self, tmp_path):
+        """Row 9: checkpoint config dict carries model_name for Task-5 rebuild."""
+        import torch
+
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        path = tmp_path / "best.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "cnn_scratch", cfg, CLASS_NAMES)
+        ckpt = torch.load(path, weights_only=True)
+        assert ckpt["config"]["model_name"] == "cnn_scratch"
+
+
+class TestFixRoundThreeValidators:
+    """Fix-round-3: isfinite guards + validator coverage-gap closures."""
+
+    def test_scratch_lr_zero_rejected(self):
+        """Scratch script rejects --lr 0 (its own validator error path)."""
+        import scripts.train_scratch as scratch
+
+        with pytest.raises(SystemExit):
+            scratch.parse_args(["--lr", "0"])
+
+    def test_transfer_epochs_zero_rejected(self):
+        """Transfer script rejects --epochs 0 (its own _positive_int path)."""
+        import scripts.train_transfer as transfer
+
+        with pytest.raises(SystemExit):
+            transfer.parse_args(["--epochs", "0"])
+
+    def test_transfer_valid_args_accepted(self):
+        """Transfer accepts valid --epochs/--lr (happy path both validators)."""
+        import scripts.train_transfer as transfer
+
+        args = transfer.parse_args(["--epochs", "5", "--lr", "0.0005"])
+        assert args.epochs == 5
+        assert args.lr == pytest.approx(5e-4)
+
+    @pytest.mark.parametrize("bad", ["nan", "inf", "-inf"])
+    def test_nan_inf_lr_rejected(self, bad):
+        """Both scripts reject non-finite --lr values (isfinite guard)."""
+        import scripts.train_scratch as scratch
+        import scripts.train_transfer as transfer
+
+        with pytest.raises(SystemExit):
+            scratch.parse_args(["--lr", bad])
+        with pytest.raises(SystemExit):
+            transfer.parse_args(["--lr", bad])
+
+
+class TestFixRoundThreeBehavioral:
+    """Fix-round-3: real DataLoader integration + artifact content asserts."""
+
+    def test_real_dataloader_integration(self):
+        """M3: train/validate/evaluate with a real torch DataLoader (partial batch)."""
+        from torch.utils.data import DataLoader, TensorDataset
+
+        from cnn_classifier.training.evaluate import evaluate
+        from cnn_classifier.training.train import train_one_epoch, validate
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        crit = torch.nn.CrossEntropyLoss()
+
+        class _Constant(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.bias = torch.nn.Parameter(torch.tensor(10.0))
+
+            def forward(self, x):
+                out = torch.zeros(x.shape[0], 10)
+                out[:, 0] = self.bias
+                return out
+
+        const = _Constant()
+        data_x = torch.randn(5, 3, 32, 32)
+        data_y = torch.zeros(5, dtype=torch.long)
+        loader = DataLoader(TensorDataset(data_x, data_y), batch_size=2, shuffle=False)
+        train_m = train_one_epoch(const, loader, opt, crit, "cpu")
+        assert train_m["acc"] == 1.0
+        val_m = validate(const, loader, crit, "cpu")
+        assert val_m["acc"] == 1.0
+        metrics = evaluate(const, loader, "cpu", CLASS_NAMES)
+        assert metrics["acc"] == 1.0
+
+    def test_artifact_contents_asserted(self, tmp_path, monkeypatch, caplog):
+        """M4: labels.json and classification_report.json carry correct CONTENTS."""
+        import logging
+
+        from cnn_classifier.training import cli as cli_module
+        from cnn_classifier.training.cli import run_training
+
+        caplog.at_level(logging.INFO, logger="cnn_classifier.training.cli")
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        stub = _AlwaysZero()
+        monkeypatch.setattr(cli_module, "get_model", lambda name, config: stub)
+        val_loader = [(torch.randn(2, 3, 32, 32), torch.zeros(2, dtype=torch.long))]
+        monkeypatch.setattr(
+            cli_module,
+            "get_dataloaders",
+            lambda config: (_fake_loader(), val_loader, val_loader),
+        )
+        run_training(cfg, "stub", epochs=1, lr=1e-3)
+        labels_path = tmp_path / "checkpoints" / "labels.json"
+        report_path = tmp_path / "checkpoints" / "classification_report.json"
+        assert json.loads(labels_path.read_text()) == CLASS_NAMES
+        report = json.loads(report_path.read_text())
+        assert report["acc"] == pytest.approx(1.0)
+
+    def test_zero_grad_called_per_batch(self):
+        """Row 12: optimizer.zero_grad() fires once per batch."""
+        from cnn_classifier.training.train import train_one_epoch
+
+        model = _AlwaysZero()
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        calls = []
+        real_zero = opt.zero_grad
+
+        def counting_zero_grad():
+            calls.append(1)
+            real_zero()
+
+        opt.zero_grad = counting_zero_grad
+        crit = torch.nn.CrossEntropyLoss()
+        loader = _fake_loader(batch_size=2, batches=3)
+        train_one_epoch(model, loader, opt, crit, "cpu")
+        assert len(calls) == 3
+
+    def test_validate_then_train_restores_train_mode(self):
+        """Row 12: validate leaves eval; train_one_epoch restores train mode."""
+        from cnn_classifier.training.train import train_one_epoch, validate
+
+        model = _AlwaysZero()
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        crit = torch.nn.CrossEntropyLoss()
+        loader = _fake_loader()
+        validate(model, loader, crit, "cpu")
+        assert model.training is False
+        train_one_epoch(model, loader, opt, crit, "cpu")
         assert model.training is True

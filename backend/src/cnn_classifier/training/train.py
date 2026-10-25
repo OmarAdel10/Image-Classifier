@@ -8,6 +8,7 @@ backbone is switched to ``eval()`` inside ``train_one_epoch`` so BatchNorm
 running statistics stay frozen while the head trains.
 """
 
+import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -31,8 +32,10 @@ def _enforce_frozen_backbone_eval(model: nn.Module) -> None:
     backbone = getattr(model, "backbone", None)
     if backbone is None:
         return
-    if any(not param.requires_grad for param in backbone.parameters()):
-        backbone.eval()
+    for module in backbone.modules():
+        params = list(module.parameters())
+        if params and all(not p.requires_grad for p in params):
+            module.eval()
 
 
 def train_one_epoch(
@@ -110,6 +113,7 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     epoch: int,
     best_val_acc: float,
+    model_name: str,
     config: Config,
     class_names: list,
 ) -> None:
@@ -121,6 +125,7 @@ def save_checkpoint(
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
     torch.save(
         {
             "model_state": model.state_dict(),
@@ -128,6 +133,7 @@ def save_checkpoint(
             "epoch": epoch,
             "best_val_acc": best_val_acc,
             "config": {
+                "model_name": model_name,
                 "input_size": tuple(config.input_size),
                 "seed": config.seed,
                 "device": config.device,
@@ -135,5 +141,6 @@ def save_checkpoint(
             },
             "class_names": list(class_names),
         },
-        path,
+        tmp_path,
     )
+    os.replace(tmp_path, path)

@@ -8,6 +8,7 @@ persists the metrics dict as JSON.
 """
 
 import json
+import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -82,7 +83,9 @@ def evaluate(
 
 
 def save_classification_report(metrics: dict, path: str | Path) -> None:
-    """Persist an evaluate() metrics dict as a JSON report."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(metrics, indent=2))
+    """Persist an evaluate() metrics dict as a JSON report atomically."""
+    report_path = Path(path)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = report_path.with_suffix(report_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(metrics, indent=2))
+    os.replace(tmp_path, report_path)
