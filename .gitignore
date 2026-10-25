@@ -59,3 +59,7 @@ backend/data/
 # Training outputs and local secrets
 backend/checkpoints/
 backend/.env
+
+# Local env files and session working docs
+/.env
+docs/
