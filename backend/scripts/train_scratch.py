@@ -2,30 +2,17 @@
 
 import argparse
 import logging
-import math
+import os
 
+from cnn_classifier.cli_args import positive_float, positive_int
 from cnn_classifier.training.cli import run_training
-
-
-def _positive_int(value):
-    number = int(value)
-    if number <= 0:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return number
-
-
-def _positive_float(value):
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise argparse.ArgumentTypeError("must be a positive float")
-    return number
 
 
 def parse_args(argv=None):
     """Parse CLI args: --epochs, --lr, --model-name."""
     parser = argparse.ArgumentParser(description="Train a from-scratch CIFAR-10 classifier")
-    parser.add_argument("--epochs", type=_positive_int, default=30)
-    parser.add_argument("--lr", type=_positive_float, default=1e-3)
+    parser.add_argument("--epochs", type=positive_int, default=30)
+    parser.add_argument("--lr", type=positive_float, default=1e-3)
     parser.add_argument("--model-name", type=str, default="cnn_scratch")
     return parser.parse_args(argv)
 
@@ -35,6 +22,7 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = parse_args()
+    os.environ.setdefault("CNN_MODEL_PATH", f"checkpoints/best_model_{args.model_name}.pt")
     from cnn_classifier.config import get_config
 
     run_training(get_config(), args.model_name, args.epochs, args.lr)

@@ -3,12 +3,12 @@
 Consumes ``Config`` (via callers), ``get_dataloaders`` output, and any
 ``nn.Module`` produced by ``get_model``. The training step enforces the
 frozen-backbone contract documented in ``cnn_classifier.models.transfer``:
-when a model has a backbone whose parameters are (partially) frozen, the
-backbone is switched to ``eval()`` inside ``train_one_epoch`` so BatchNorm
-running statistics stay frozen while the head trains.
+when a model has a backbone, modules whose parameters are all frozen
+are switched to ``eval()`` inside ``train_one_epoch`` (param-less modules
+like Dropout stay in train mode) so BatchNorm running statistics stay
+frozen while the head trains.
 """
 
-import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -16,6 +16,7 @@ import torch
 from torch import nn
 
 from cnn_classifier.config import Config
+from cnn_classifier.training.atomic import atomic_write
 
 # Gradient clipping bound applied after loss.backward() (spec: max_norm=1.0).
 _GRAD_CLIP_NORM = 1.0
@@ -72,11 +73,10 @@ def train_one_epoch(
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=_GRAD_CLIP_NORM)
         optimizer.step()
-        total_loss += loss.item()
+        total_loss += loss.item() * targets.size(0)
         correct += (logits.argmax(dim=1) == targets).sum().item()
         seen += targets.size(0)
-    avg_loss = total_loss / len(loader) if len(loader) else 0.0
-    return {"loss": avg_loss, "acc": correct / seen if seen else 0.0}
+    return {"loss": total_loss / seen if seen else 0.0, "acc": correct / seen if seen else 0.0}
 
 
 def validate(
@@ -100,11 +100,10 @@ def validate(
             targets = targets.to(device)
             logits = model(inputs)
             loss = criterion(logits, targets)
-            total_loss += loss.item()
+            total_loss += loss.item() * targets.size(0)
             correct += (logits.argmax(dim=1) == targets).sum().item()
             seen += targets.size(0)
-    avg_loss = total_loss / len(loader) if len(loader) else 0.0
-    return {"loss": avg_loss, "acc": correct / seen if seen else 0.0}
+    return {"loss": total_loss / seen if seen else 0.0, "acc": correct / seen if seen else 0.0}
 
 
 def save_checkpoint(
@@ -123,24 +122,18 @@ def save_checkpoint(
     ``optimizer_state``, ``epoch``, ``best_val_acc``, ``config``, and
     ``class_names``.
     """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    torch.save(
-        {
-            "model_state": model.state_dict(),
-            "optimizer_state": optimizer.state_dict(),
-            "epoch": epoch,
-            "best_val_acc": best_val_acc,
-            "config": {
-                "model_name": model_name,
-                "input_size": tuple(config.input_size),
-                "seed": config.seed,
-                "device": config.device,
-                "batch_size": config.batch_size,
-            },
-            "class_names": list(class_names),
+    payload = {
+        "model_state": model.state_dict(),
+        "optimizer_state": optimizer.state_dict(),
+        "epoch": epoch,
+        "best_val_acc": best_val_acc,
+        "config": {
+            "model_name": model_name,
+            "input_size": tuple(config.input_size),
+            "seed": config.seed,
+            "device": config.device,
+            "batch_size": config.batch_size,
         },
-        tmp_path,
-    )
-    os.replace(tmp_path, path)
+        "class_names": list(class_names),
+    }
+    atomic_write(path, lambda tmp: torch.save(payload, tmp))

@@ -2,23 +2,10 @@
 
 import argparse
 import logging
-import math
+import os
 
+from cnn_classifier.cli_args import positive_float, positive_int
 from cnn_classifier.training.cli import run_training
-
-
-def _positive_int(value):
-    number = int(value)
-    if number <= 0:
-        raise argparse.ArgumentTypeError("must be a positive integer")
-    return number
-
-
-def _positive_float(value):
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise argparse.ArgumentTypeError("must be a positive float")
-    return number
 
 
 def parse_args(argv=None):
@@ -31,8 +18,8 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="Fine-tune a pretrained transfer model on CIFAR-10"
     )
-    parser.add_argument("--epochs", type=_positive_int, default=30)
-    parser.add_argument("--lr", type=_positive_float, default=1e-4)
+    parser.add_argument("--epochs", type=positive_int, default=30)
+    parser.add_argument("--lr", type=positive_float, default=1e-4)
     parser.add_argument("--model-name", type=str, default="resnet18")
     parser.add_argument(
         "--input-size",
@@ -40,6 +27,7 @@ def parse_args(argv=None):
         nargs=2,
         default=[32, 32],
         metavar=("H", "W"),
+        help="only 32 32 currently supported (CIFAR-10 native)",
     )
     args = parser.parse_args(argv)
     args.input_size = tuple(args.input_size)
@@ -56,6 +44,7 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = parse_args()
+    os.environ.setdefault("CNN_MODEL_PATH", f"checkpoints/best_model_{args.model_name}.pt")
     from cnn_classifier.config import Config
 
     config = Config(input_size=tuple(args.input_size))

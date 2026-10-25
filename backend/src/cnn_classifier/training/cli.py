@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import random
 
 import torch
@@ -11,6 +10,7 @@ from torch import nn
 from cnn_classifier.config import Config
 from cnn_classifier.data import get_dataloaders
 from cnn_classifier.models import get_model
+from cnn_classifier.training.atomic import atomic_write
 from cnn_classifier.training.evaluate import evaluate, save_classification_report
 from cnn_classifier.training.train import save_checkpoint, train_one_epoch, validate
 
@@ -85,19 +85,26 @@ def run_training(config: Config, model_name: str, epochs: int, lr: float) -> Non
     if checkpoint_saved_this_run:
         best_state = torch.load(config.model_path_resolved, weights_only=True)
         model.load_state_dict(best_state["model_state"])
+    elif config.model_path_resolved.exists():
+        logger.warning(
+            "no val-acc improvement this run; %s left from a previous run "
+            "and was not updated - report/labels describe the final weights",
+            config.model_path_resolved,
+        )
+    else:
+        logger.warning(
+            "no checkpoint saved this run (no val-acc improvement) - "
+            "report/labels describe the final weights"
+        )
 
     # Spec artifacts: evaluate on the held-out test set and persist the
     # class names alongside the checkpoint (plan lines 357-359).
     test_metrics = evaluate(model, test_loader, config.device, class_names)
+    test_metrics["evaluated_epoch"] = best_epoch if checkpoint_saved_this_run else epochs
     save_classification_report(
         test_metrics, config.model_path_resolved.parent / "classification_report.json"
     )
-    config.labels_path_resolved.parent.mkdir(parents=True, exist_ok=True)
-    labels_tmp = config.labels_path_resolved.with_suffix(
-        config.labels_path_resolved.suffix + ".tmp"
-    )
-    labels_tmp.write_text(json.dumps(class_names))
-    os.replace(labels_tmp, config.labels_path_resolved)
+    atomic_write(config.labels_path_resolved, lambda tmp: tmp.write_text(json.dumps(class_names)))
     logger.info("saved labels.json and classification_report.json")
 
 

@@ -180,7 +180,7 @@ class TestEvaluate:
         loaded = json.loads(report_path.read_text())
         assert loaded["acc"] == metrics["acc"]
         assert "confusion_matrix" in loaded
-        assert not report_path.with_suffix(report_path.suffix + ".tmp").exists()
+        assert not list(report_path.parent.glob("*.tmp*"))
 
 
 class TestCheckpoint:
@@ -226,7 +226,7 @@ class TestCheckpoint:
         head_weight = model.head[-1].weight.detach()
         restored = checkpoint["model_state"]["head.4.weight"]
         assert torch.equal(head_weight, restored)
-        assert not ckpt_path.with_suffix(ckpt_path.suffix + ".tmp").exists()
+        assert not list(ckpt_path.parent.glob("*.tmp*"))
 
     def test_atomic_write_failure_preserves_old_checkpoint(self, tmp_path, monkeypatch):
         """A failed save leaves the previous checkpoint intact with no .tmp residue."""
@@ -238,15 +238,17 @@ class TestCheckpoint:
         path = tmp_path / "best_model.pt"
         save_checkpoint(path, model, opt, 1, 0.5, "cnn_scratch", cfg, CLASS_NAMES)
 
-        def boom(*args, **kwargs):
+        def partial_write_then_raise(obj, f):
+            with open(f, "wb") as handle:
+                handle.write(b"PARTIAL")
             raise RuntimeError("disk full")
 
-        monkeypatch.setattr(torch, "save", boom)
+        monkeypatch.setattr(torch, "save", partial_write_then_raise)
         with pytest.raises(RuntimeError, match="disk full"):
             save_checkpoint(path, model, opt, 2, 0.7, "cnn_scratch", cfg, CLASS_NAMES)
         ckpt = torch.load(path, weights_only=True)
         assert ckpt["epoch"] == 1
-        assert not path.with_suffix(path.suffix + ".tmp").exists()
+        assert not list(path.parent.glob("*.tmp*"))
 
 
 class TestScriptEntryPoints:
@@ -595,6 +597,7 @@ class TestCliMains:
         sentinel = object()
         calls = []
         monkeypatch.setattr(sys, "argv", ["train_scratch.py", "--epochs", "2"])
+        monkeypatch.setenv("CNN_MODEL_PATH", "wiring-test.pt")
         monkeypatch.setattr(config_module, "get_config", lambda: sentinel)
         monkeypatch.setattr(
             scratch_module,
@@ -622,6 +625,7 @@ class TestCliMains:
             return sentinel
 
         monkeypatch.setattr(sys, "argv", ["train_transfer.py"])
+        monkeypatch.setenv("CNN_MODEL_PATH", "wiring-test.pt")
         monkeypatch.setattr(config_module, "Config", fake_config)
         monkeypatch.setattr(
             transfer_module,
@@ -693,29 +697,31 @@ class TestFixRoundTwoSecurity:
         assert captured["model"].state_dict()["bias"] == best_bias
         assert (tmp_path / "checkpoints" / "classification_report.json").exists()
 
-    def test_train_transfer_input_size_must_be_32(self):
+    def test_train_transfer_input_size_must_be_32(self, capsys):
         """--input-size values other than 32 32 fail fast with a clear error."""
         from scripts import train_transfer
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             train_transfer.parse_args(["--input-size", "64", "64"])
+        captured = capsys.readouterr()
+        assert "supports only 32 32" in captured.err
 
     def test_epochs_must_be_positive(self):
         """--epochs 0 (or negative) is rejected by argparse."""
         from scripts import train_scratch
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             train_scratch.parse_args(["--epochs", "0"])
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             train_scratch.parse_args(["--epochs", "-5"])
 
     def test_lr_must_be_positive(self):
         """--lr 0 (or negative) is rejected by argparse."""
         from scripts import train_transfer
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             train_transfer.parse_args(["--lr", "0"])
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             train_transfer.parse_args(["--lr", "-1e-3"])
 
 
@@ -799,8 +805,14 @@ class TestFixRoundTwoBehavioral:
         calls = []
         real_seed = torch.manual_seed
         monkeypatch.setattr(torch, "manual_seed", lambda s: calls.append(s) or real_seed(s))
+        import random
+
+        random_calls = []
+        real_random_seed = random.seed
+        monkeypatch.setattr(random, "seed", lambda s: random_calls.append(s) or real_random_seed(s))
         run_training(cfg, "stub", epochs=1, lr=1e-3)
         assert cfg.seed in calls
+        assert cfg.seed in random_calls
 
     def test_enforce_frozen_backbone_no_backbone_noop(self):
         """Models without a backbone attribute are left unchanged."""
@@ -848,7 +860,7 @@ class TestFixRoundThreeSecurity:
         assert model.backbone.bn1.training is False
         assert model.backbone.fc.training is True
 
-    def test_stale_checkpoint_not_reloaded_on_zero_improvement(self, tmp_path, monkeypatch):
+    def test_stale_checkpoint_not_reloaded_on_zero_improvement(self, tmp_path, monkeypatch, caplog):
         """Row 5: zero-improvement run must not reload a stale best_model.pt."""
         from cnn_classifier.training import cli as cli_module
         from cnn_classifier.training.cli import run_training
@@ -879,6 +891,8 @@ class TestFixRoundThreeSecurity:
         assert (tmp_path / "checkpoints" / "best_model.pt").exists()
         current_bias = captured_models[0].state_dict()["bias"]
         assert float(current_bias) != 123.0
+        assert "no val-acc improvement" in caplog.text
+        assert "was not updated" in caplog.text
 
     def test_checkpoint_model_name_roundtrip(self, tmp_path):
         """Row 9: checkpoint config dict carries model_name for Task-5 rebuild."""
@@ -902,14 +916,14 @@ class TestFixRoundThreeValidators:
         """Scratch script rejects --lr 0 (its own validator error path)."""
         import scripts.train_scratch as scratch
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             scratch.parse_args(["--lr", "0"])
 
     def test_transfer_epochs_zero_rejected(self):
         """Transfer script rejects --epochs 0 (its own _positive_int path)."""
         import scripts.train_transfer as transfer
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             transfer.parse_args(["--epochs", "0"])
 
     def test_transfer_valid_args_accepted(self):
@@ -926,9 +940,9 @@ class TestFixRoundThreeValidators:
         import scripts.train_scratch as scratch
         import scripts.train_transfer as transfer
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             scratch.parse_args(["--lr", bad])
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit, match="2"):
             transfer.parse_args(["--lr", bad])
 
 
@@ -992,6 +1006,7 @@ class TestFixRoundThreeBehavioral:
         assert json.loads(labels_path.read_text()) == CLASS_NAMES
         report = json.loads(report_path.read_text())
         assert report["acc"] == pytest.approx(1.0)
+        assert report["evaluated_epoch"] == 1
         checkpoint_dir = tmp_path / "checkpoints"
         assert {p.name for p in checkpoint_dir.iterdir()} == {
             "best_model.pt",
@@ -1030,3 +1045,150 @@ class TestFixRoundThreeBehavioral:
         assert model.training is False
         train_one_epoch(model, loader, opt, crit, "cpu")
         assert model.training is True
+
+
+class TestAtomicWriteHelper:
+    """Direct tests for the shared atomic_write helper (M3)."""
+
+    def test_success_replaces_content_no_residue(self, tmp_path):
+        """A successful write lands the content and leaves no tmp files."""
+        from cnn_classifier.training.atomic import atomic_write
+
+        target = tmp_path / "nested" / "out.txt"
+        atomic_write(target, lambda tmp: tmp.write_text("hello"))
+        assert target.read_text() == "hello"
+        assert not list(tmp_path.rglob("*.tmp*"))
+
+    def test_failure_preserves_old_file_and_cleans_residue(self, tmp_path):
+        """A failing write keeps the old file and removes the partial tmp."""
+        from cnn_classifier.training.atomic import atomic_write
+
+        target = tmp_path / "out.txt"
+        target.write_text("old")
+
+        def writer(tmp):
+            tmp.write_text("partial")
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            atomic_write(target, writer)
+        assert target.read_text() == "old"
+        assert not list(tmp_path.glob("*.tmp*"))
+
+    def test_report_write_failure_preserves_previous_report(self, tmp_path, monkeypatch):
+        """A failed report write leaves the previous report intact."""
+        from pathlib import Path
+
+        from cnn_classifier.training.evaluate import save_classification_report
+
+        report_path = tmp_path / "report.json"
+        save_classification_report(
+            {"acc": 0.5, "per_class": {}, "confusion_matrix": []}, report_path
+        )
+
+        def boom(self, data, *args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(Path, "write_text", boom)
+        with pytest.raises(RuntimeError, match="disk full"):
+            save_classification_report(
+                {"acc": 0.9, "per_class": {}, "confusion_matrix": []}, report_path
+            )
+        assert json.loads(report_path.read_text())["acc"] == 0.5
+        assert not list(report_path.parent.glob("*.tmp*"))
+
+
+class TestFixRoundFiveM4Paths:
+    """Per-model default checkpoint paths (user-ruled M4)."""
+
+    def test_scratch_main_sets_per_model_checkpoint_default(self, tmp_path, monkeypatch):
+        """train_scratch defaults to best_model_cnn_scratch.pt."""
+        import scripts.train_scratch as scratch
+
+        monkeypatch.delenv("CNN_MODEL_PATH", raising=False)
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["train_scratch.py"])
+        from cnn_classifier.config import clear_config_cache
+
+        clear_config_cache()
+        recorded = []
+        monkeypatch.setattr(
+            scratch, "run_training", lambda config, name, epochs, lr: recorded.append(config)
+        )
+        scratch.main()
+        assert recorded[0].model_path == "checkpoints/best_model_cnn_scratch.pt"
+        clear_config_cache()
+        import os
+
+        os.environ.pop("CNN_MODEL_PATH", None)
+
+    def test_transfer_main_sets_per_model_checkpoint_default(self, tmp_path, monkeypatch):
+        """train_transfer defaults to best_model_resnet18.pt."""
+        import scripts.train_transfer as transfer
+
+        monkeypatch.delenv("CNN_MODEL_PATH", raising=False)
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["train_transfer.py"])
+        recorded = []
+        monkeypatch.setattr(
+            transfer, "run_training", lambda config, name, epochs, lr: recorded.append(config)
+        )
+        transfer.main()
+        assert recorded[0].model_path == "checkpoints/best_model_resnet18.pt"
+        import os
+
+        os.environ.pop("CNN_MODEL_PATH", None)
+
+    def test_model_path_env_override_respected(self, tmp_path, monkeypatch):
+        """An explicit CNN_MODEL_PATH beats the per-model default."""
+        import scripts.train_scratch as scratch
+
+        monkeypatch.setenv("CNN_MODEL_PATH", "custom.pt")
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.setattr(sys, "argv", ["train_scratch.py"])
+        from cnn_classifier.config import clear_config_cache
+
+        clear_config_cache()
+        recorded = []
+        monkeypatch.setattr(
+            scratch, "run_training", lambda config, name, epochs, lr: recorded.append(config)
+        )
+        scratch.main()
+        assert recorded[0].model_path == "custom.pt"
+        clear_config_cache()
+
+
+class TestFixRoundFiveFrozenEval:
+    """Coverage-Low: mixed-freeze module semantics (per-module eval)."""
+
+    def test_enforce_frozen_backbone_mixed_module_stays_train(self):
+        """A module mixing frozen and trainable params stays in train mode."""
+        from cnn_classifier.training.train import _enforce_frozen_backbone_eval
+
+        class _Mixed(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.frozen = nn.Parameter(torch.zeros(1))
+                self.frozen.requires_grad = False
+                self.trainable = nn.Parameter(torch.zeros(1))
+
+            def forward(self, x):
+                return x
+
+        class _Carrier(nn.Module):
+            def __init__(self):
+                super().__init__()
+                frozen_layer = nn.Linear(2, 2)
+                for param in frozen_layer.parameters():
+                    param.requires_grad = False
+                self.backbone = nn.ModuleList([_Mixed(), frozen_layer])
+                self.frozen_layer = frozen_layer
+
+            def forward(self, x):
+                return x
+
+        model = _Carrier()
+        model.train()
+        _enforce_frozen_backbone_eval(model)
+        assert model.backbone.training is True
+        assert model.frozen_layer.training is False
