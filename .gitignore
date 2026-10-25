@@ -51,3 +51,11 @@ lectures/*
 # Backend dataset downloads (CIFAR-10 cache, ~340MB)
 backend/data/
 
+
+# Python test/build artifacts
+.coverage
+*.egg-info/
+
+# Training outputs and local secrets
+backend/checkpoints/
+backend/.env
