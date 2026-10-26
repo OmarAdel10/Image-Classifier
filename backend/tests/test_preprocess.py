@@ -80,3 +80,10 @@ class TestFixRoundOnePreprocess:
         """One pixel over the cap (2000x1001) is rejected."""
         with pytest.raises(ValueError, match="pixel cap"):
             preprocess_image(Image.new("RGB", (2000, 1001), color="green"), (32, 32))
+
+    def test_pixel_cap_enforced_on_lazy_image(self, tmp_path):
+        """The cap fires before decode on a lazily-opened image file."""
+        img_path = tmp_path / "big.png"
+        Image.new("RGB", (2000, 1001), color="green").save(img_path)
+        with pytest.raises(ValueError, match="pixel cap"):
+            preprocess_image(Image.open(img_path), (32, 32))

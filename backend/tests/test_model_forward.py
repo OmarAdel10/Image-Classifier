@@ -221,3 +221,19 @@ class TestModelRegistry:
             "get_model",
             "MODEL_REGISTRY",
         }
+
+    def test_get_model_pretrained_false_propagates(self, monkeypatch):
+        """pretrained=False reaches TransferModel via both registry and get_model."""
+        import cnn_classifier.models.registry as registry_module
+
+        recorded = []
+
+        def record(arch_name, config, pretrained=True):
+            recorded.append((arch_name, config, pretrained))
+            return object()
+
+        monkeypatch.setattr(registry_module, "TransferModel", record)
+        cfg = Config(input_size=(224, 224), device="cpu")
+        MODEL_REGISTRY["vgg16"](cfg, pretrained=False)
+        get_model("vgg16", cfg, pretrained=False)
+        assert recorded == [("vgg16", cfg, False), ("vgg16", cfg, False)]

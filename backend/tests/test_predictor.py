@@ -407,3 +407,93 @@ class TestFixRoundThree:
         pred = Predictor.from_checkpoint(str(_build_checkpoint(tmp_path, cfg)), cfg)
         with pytest.raises(ValueError, match="matching checkpoint input size"):
             pred.predict(torch.randn(1, 1, 32, 32))
+
+
+class TestFixRoundFour:
+    """Fix-round-4: element types, NaN weights, env decoupling, contract pins."""
+
+    @pytest.mark.parametrize("input_size", [["x", "y"], [True, True]])
+    def test_checkpoint_input_size_non_int_elements_rejected(self, tmp_path, input_size):
+        """Non-int input_size elements are rejected before Config construction."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        path = tmp_path / "bad_elem.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": {"model_name": "cnn_scratch", "input_size": input_size},
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="malformed checkpoint config"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_nan_weights_rejected(self, tmp_path):
+        """Checkpoints whose weights produce non-finite outputs are rejected."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        ckpt = torch.load(path, weights_only=True)
+        ckpt["model_state"]["head.4.weight"].fill_(float("nan"))
+        torch.save(ckpt, path)
+        with pytest.raises(ValueError, match="non-finite"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_from_checkpoint_ignores_hostile_model_path_env(self, tmp_path, monkeypatch):
+        """A hostile CNN_MODEL_PATH env cannot break checkpoint loading."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        monkeypatch.setenv("CNN_MODEL_PATH", "/etc/passwd")
+        path = _build_checkpoint(tmp_path, cfg)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        results = pred.predict(torch.randn(1, 3, 32, 32))
+        assert len(results) == 10
+
+    @pytest.mark.parametrize("names", [[1] * 10, ["a", 2] + ["c"] * 8])
+    def test_class_names_list_with_non_string_rejected(self, tmp_path, names):
+        """class_names lists containing non-string items are rejected."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        path = tmp_path / "bad_names.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": {"model_name": "cnn_scratch", "input_size": [32, 32]},
+                "class_names": names,
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="class_names must be a list of strings"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    @pytest.mark.parametrize("input_size", [(32,), (32, 32, 32)])
+    def test_checkpoint_input_size_wrong_length_rejected(self, tmp_path, input_size):
+        """input_size of wrong arity is rejected by the config guard."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        path = tmp_path / "bad_len.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": {"model_name": "cnn_scratch", "input_size": input_size},
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="malformed checkpoint config"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_inference_all_matches_public_names(self):
+        """Package __all__ exports exactly the public inference surface."""
+        import cnn_classifier.inference as pkg
+
+        assert set(pkg.__all__) == {"preprocess_image", "Prediction", "Predictor"}

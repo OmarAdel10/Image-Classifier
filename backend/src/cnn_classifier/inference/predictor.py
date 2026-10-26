@@ -1,6 +1,7 @@
 """Predictor: load a checkpoint and run single-image inference."""
 
 from collections import namedtuple
+from pathlib import Path
 
 import torch
 
@@ -21,7 +22,7 @@ class Predictor:
         self.input_size = tuple(input_size)
 
     @classmethod
-    def from_checkpoint(cls, path: str, config: Config) -> "Predictor":
+    def from_checkpoint(cls, path: str | Path, config: Config) -> "Predictor":
         """Rebuild the trained model from a checkpoint file.
 
         The model class comes from the checkpoint's recorded
@@ -43,9 +44,17 @@ class Predictor:
             or "input_size" not in ckpt_config
             or not isinstance(ckpt_config["input_size"], (list, tuple))
             or len(ckpt_config["input_size"]) != 2
+            or not all(
+                isinstance(v, int) and not isinstance(v, bool) for v in ckpt_config["input_size"]
+            )
         ):
             raise ValueError(f"malformed checkpoint config: {ckpt_config!r}")
-        model_config = Config(input_size=tuple(ckpt_config["input_size"]), device=config.device)
+        model_config = Config(
+            input_size=tuple(ckpt_config["input_size"]),
+            device=config.device,
+            model_path=config.model_path,
+            labels_path=config.labels_path,
+        )
         if not isinstance(checkpoint["model_state"], dict):
             raise ValueError("checkpoint model_state does not match recorded architecture")
         model = get_model(ckpt_config["model_name"], model_config, pretrained=False)
@@ -64,9 +73,11 @@ class Predictor:
             probe = model(torch.zeros(1, 3, *model_config.input_size, device=config.device))
         if len(class_names) != probe.shape[1]:
             raise ValueError(f"class count {len(class_names)} != model outputs {probe.shape[1]}")
+        if not torch.isfinite(probe).all():
+            raise ValueError("checkpoint weights produce non-finite outputs")
         return cls(model, class_names, config.device, tuple(ckpt_config["input_size"]))
 
-    def predict(self, tensor: torch.Tensor) -> list:
+    def predict(self, tensor: torch.Tensor) -> list[Prediction]:
         """Classify one preprocessed image tensor.
 
         Args:
