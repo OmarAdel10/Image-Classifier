@@ -115,3 +115,121 @@ class TestPredictor:
         torch.save({"model_state": {}, "epoch": 1}, bad)
         with pytest.raises(ValueError, match="missing required keys"):
             Predictor.from_checkpoint(str(bad), cfg)
+
+
+class _Evil:
+    """Module-level unpicklable-by-weights-only class for the security test."""
+
+
+class TestFixRoundOne:
+    """Fix-round-1: provenance, unsafe-pickle, pipeline, validation gaps."""
+
+    def test_resnet18_provenance_rebuild(self, tmp_path):
+        """Checkpoint provenance wins over drifted runtime config."""
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        ckpt_cfg = Config(device="cpu", input_size=(224, 224))
+        model = TransferModel("resnet18", ckpt_cfg, pretrained=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        names = [f"c{i}" for i in range(10)]
+        path = tmp_path / "resnet_ckpt.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "resnet18", ckpt_cfg, names)
+
+        drifted = Config(device="cpu", input_size=(32, 32))
+        pred = Predictor.from_checkpoint(str(path), drifted)
+        assert isinstance(pred.model, TransferModel)
+        assert pred.input_size == (224, 224)
+        results = pred.predict(torch.randn(1, 3, 224, 224))
+        assert len(results) == 10
+        assert set(r.class_name for r in results) == set(names)
+
+    def test_unsafe_pickle_rejected(self, tmp_path):
+        """A valid pickle containing a disallowed object is rejected."""
+        import pickle
+
+        from cnn_classifier.inference.predictor import Predictor
+
+        bad = tmp_path / "bad.pt"
+        bad.write_bytes(
+            pickle.dumps({"model_state": {}, "config": {}, "class_names": [], "x": _Evil()})
+        )
+        cfg = Config(device="cpu", input_size=(32, 32))
+        with pytest.raises(ValueError, match="not a valid torch checkpoint"):
+            Predictor.from_checkpoint(str(bad), cfg)
+
+    def test_pipeline_end_to_end(self, tmp_path):
+        """preprocess_image feeds Predictor.predict with matching contract."""
+        from PIL import Image
+
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.inference.preprocess import preprocess_image
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        path = _build_checkpoint(tmp_path, cfg)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        img = Image.new("RGB", (64, 48), color="red")
+        tensor = preprocess_image(img, (32, 32))
+        results = pred.predict(tensor)
+        assert len(results) == 10
+        confidences = [r.confidence for r in results]
+        assert all(confidences[i] >= confidences[i + 1] for i in range(9))
+        assert abs(sum(confidences) - 1.0) < 1e-4
+
+    def test_rejects_wrong_spatial_shape(self, tmp_path):
+        """A 4-D single image with wrong H/W vs checkpoint input size is rejected."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        path = _build_checkpoint(tmp_path, cfg)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        with pytest.raises(ValueError, match="matching checkpoint input size"):
+            pred.predict(torch.randn(1, 3, 64, 64))
+
+    def test_rejects_non_4d_tensor(self, tmp_path):
+        """predict rejects 3-D and 5-D tensors."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        path = _build_checkpoint(tmp_path, cfg)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        with pytest.raises(ValueError, match="single-image"):
+            pred.predict(torch.randn(3, 32, 32))
+        with pytest.raises(ValueError, match="single-image"):
+            pred.predict(torch.randn(1, 1, 3, 32, 32))
+
+    def test_unknown_checkpoint_model_name_rejected(self, tmp_path):
+        """Unknown model_name in checkpoint propagates a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        model = get_model("cnn_scratch", cfg)
+        bad = tmp_path / "bogus.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": {"model_name": "bogus", "input_size": (32, 32)},
+                "class_names": list(cfg.class_names),
+            },
+            bad,
+        )
+        with pytest.raises(ValueError, match="unknown model"):
+            Predictor.from_checkpoint(str(bad), cfg)
+
+    def test_class_count_mismatch_rejected(self, tmp_path):
+        """class_names shorter than the model head raises ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        model = get_model("cnn_scratch", cfg)
+        short = tmp_path / "short.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": {"model_name": "cnn_scratch", "input_size": (32, 32)},
+                "class_names": ["a", "b"],
+            },
+            short,
+        )
+        with pytest.raises(ValueError, match="class count"):
+            Predictor.from_checkpoint(str(short), cfg)

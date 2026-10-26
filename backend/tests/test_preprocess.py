@@ -54,3 +54,19 @@ class TestPreprocessImage:
         img = Image.new("RGB", (64, 100), color="green")
         tensor = preprocess_image(img, (32, 32))
         assert tensor.shape == (1, 3, 32, 32)
+
+
+class TestFixRoundOnePreprocess:
+    """Fix-round-1: pixel cap and non-square targets."""
+
+    def test_preprocess_pixel_cap_exceeded(self):
+        """Oversized source images are rejected before decode-heavy work."""
+        big = Image.new("RGB", (3000, 3000), color="green")
+        with pytest.raises(ValueError, match="pixel cap"):
+            preprocess_image(big, (32, 32))
+
+    def test_preprocess_non_square_target(self):
+        """Non-square targets resize to (1, 3, H, W) with H != W."""
+        img = Image.new("RGB", (64, 100), color="blue")
+        out = preprocess_image(img, (32, 48))
+        assert out.shape == (1, 3, 32, 48)

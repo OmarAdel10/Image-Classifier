@@ -10,6 +10,7 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
+from cnn_classifier.config import _MAX_IMAGE_PIXELS
 from cnn_classifier.data.dataset import CIFAR10_MEAN, CIFAR10_STD
 
 
@@ -24,6 +25,10 @@ def preprocess_image(image: Image.Image, input_size: tuple) -> torch.Tensor:
         Float tensor of shape (1, 3, H, W) normalized with the
         CIFAR-10 mean/std statistics.
     """
+    if image.width * image.height > _MAX_IMAGE_PIXELS:
+        raise ValueError(
+            f"image {image.width}x{image.height} exceeds pixel cap " f"({_MAX_IMAGE_PIXELS} pixels)"
+        )
     if image.mode != "RGB":
         image = image.convert("RGB")
     pipeline = transforms.Compose(

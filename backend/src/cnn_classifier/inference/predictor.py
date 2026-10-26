@@ -14,10 +14,11 @@ Prediction = namedtuple("Prediction", ["class_name", "confidence"])
 class Predictor:
     """Runs a rebuilt model on preprocessed image tensors."""
 
-    def __init__(self, model, class_names: list, device: str) -> None:
+    def __init__(self, model, class_names: list, device: str, input_size: tuple) -> None:
         self.model = model
         self.class_names = class_names
         self.device = device
+        self.input_size = tuple(input_size)
 
     @classmethod
     def from_checkpoint(cls, path: str, config: Config) -> "Predictor":
@@ -41,7 +42,12 @@ class Predictor:
         model.load_state_dict(checkpoint["model_state"])
         model = model.to(config.device)
         model.eval()
-        return cls(model, list(checkpoint["class_names"]), config.device)
+        class_names = list(checkpoint["class_names"])
+        with torch.no_grad():
+            probe = model(torch.zeros(1, 3, *model_config.input_size, device=config.device))
+        if len(class_names) != probe.shape[1]:
+            raise ValueError(f"class count {len(class_names)} != model outputs {probe.shape[1]}")
+        return cls(model, class_names, config.device, tuple(ckpt_config["input_size"]))
 
     def predict(self, tensor: torch.Tensor) -> list:
         """Classify one preprocessed image tensor.
@@ -58,6 +64,12 @@ class Predictor:
         if tensor.dim() != 4 or tensor.shape[0] != 1:
             raise ValueError(
                 f"expected a single-image tensor (1, C, H, W), got shape {tuple(tensor.shape)}"
+            )
+        if tuple(tensor.shape[1:]) != (3, *self.input_size):
+            raise ValueError(
+                f"expected tensor (1, 3, {self.input_size[0]}, {self.input_size[1]}) "
+                f"matching checkpoint input size {self.input_size}, "
+                f"got shape {tuple(tensor.shape)}"
             )
         tensor = tensor.to(self.device)
         with torch.no_grad():
