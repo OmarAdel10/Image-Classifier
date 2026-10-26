@@ -41,16 +41,24 @@ class Predictor:
             not isinstance(ckpt_config, dict)
             or "model_name" not in ckpt_config
             or "input_size" not in ckpt_config
+            or not isinstance(ckpt_config["input_size"], (list, tuple))
+            or len(ckpt_config["input_size"]) != 2
         ):
             raise ValueError(f"malformed checkpoint config: {ckpt_config!r}")
         model_config = Config(input_size=tuple(ckpt_config["input_size"]), device=config.device)
-        model = get_model(ckpt_config["model_name"], model_config)
+        if not isinstance(checkpoint["model_state"], dict):
+            raise ValueError("checkpoint model_state does not match recorded architecture")
+        model = get_model(ckpt_config["model_name"], model_config, pretrained=False)
         try:
             model.load_state_dict(checkpoint["model_state"])
-        except RuntimeError as exc:
+        except (RuntimeError, TypeError) as exc:
             raise ValueError("checkpoint model_state does not match recorded architecture") from exc
         model = model.to(config.device)
         model.eval()
+        if not isinstance(checkpoint["class_names"], list) or not all(
+            isinstance(name, str) for name in checkpoint["class_names"]
+        ):
+            raise ValueError("malformed checkpoint contents: class_names must be a list of strings")
         class_names = list(checkpoint["class_names"])
         with torch.no_grad():
             probe = model(torch.zeros(1, 3, *model_config.input_size, device=config.device))
@@ -80,6 +88,8 @@ class Predictor:
                 f"matching checkpoint input size {self.input_size}, "
                 f"got shape {tuple(tensor.shape)}"
             )
+        if tensor.dtype != torch.float32:
+            raise ValueError(f"expected a float32 tensor, got {tensor.dtype}")
         tensor = tensor.to(self.device)
         with torch.no_grad():
             probabilities = torch.softmax(self.model(tensor), dim=1)[0]

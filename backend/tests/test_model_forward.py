@@ -202,14 +202,14 @@ class TestModelRegistry:
 
         recorded = []
 
-        def record(arch_name, config):
-            recorded.append((arch_name, config))
+        def record(arch_name, config, pretrained=True):
+            recorded.append((arch_name, config, pretrained))
             return object()
 
         monkeypatch.setattr(registry_module, "TransferModel", record)
         cfg = Config(input_size=(224, 224), device="cpu")
         MODEL_REGISTRY["vgg16"](cfg)
-        assert recorded == [("vgg16", cfg)]
+        assert recorded == [("vgg16", cfg, True)]
 
     def test_models_all_matches_public_names(self):
         """Package __all__ exports exactly the public model surface."""

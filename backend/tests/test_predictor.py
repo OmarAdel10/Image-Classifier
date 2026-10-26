@@ -308,3 +308,102 @@ class TestFixRoundTwo:
         )
         with pytest.raises(ValueError, match="does not match recorded architecture"):
             Predictor.from_checkpoint(str(path), cfg)
+
+
+class TestFixRoundThree:
+    """Fix-round-3: no pretrained download at inference + payload validation."""
+
+    def test_from_checkpoint_skips_pretrained_download(self, tmp_path, monkeypatch):
+        """from_checkpoint builds the model without downloading pretrained weights."""
+        import cnn_classifier.models.transfer as transfer_module
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        calls = []
+        real_resnet = transfer_module.resnet18
+
+        def spy_resnet(*args, **kwargs):
+            calls.append(kwargs.get("weights", "MISSING"))
+            return real_resnet(*args, **kwargs)
+
+        monkeypatch.setattr(transfer_module, "resnet18", spy_resnet)
+        ckpt_cfg = Config(device="cpu", input_size=(224, 224))
+        model = TransferModel("resnet18", ckpt_cfg, pretrained=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        path = tmp_path / "resnet.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "resnet18", ckpt_cfg, ckpt_cfg.class_names)
+        pred = Predictor.from_checkpoint(str(path), Config(device="cpu", input_size=(32, 32)))
+        assert calls and all(weight is None for weight in calls)
+        results = pred.predict(torch.randn(1, 3, 224, 224))
+        assert len(results) == 10
+
+    def test_non_dict_model_state_rejected(self, tmp_path):
+        """A non-dict model_state payload is rejected with a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = tmp_path / "none_state.pt"
+        torch.save(
+            {
+                "model_state": None,
+                "config": {"model_name": "cnn_scratch", "input_size": [32, 32]},
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="does not match recorded architecture"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_non_iterable_input_size_rejected(self, tmp_path):
+        """A non-iterable input_size in the checkpoint config is rejected."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        path = tmp_path / "int_size.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": {"model_name": "cnn_scratch", "input_size": 32},
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="malformed checkpoint config"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_string_class_names_rejected(self, tmp_path):
+        """A string or int class_names payload is rejected, not silently split."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        base = {
+            "model_state": model.state_dict(),
+            "config": {"model_name": "cnn_scratch", "input_size": [32, 32]},
+        }
+        for bad_names in ("0123456789", 7):
+            path = tmp_path / f"bad_names_{bad_names}.pt"
+            torch.save({**base, "class_names": bad_names}, path)
+            with pytest.raises(ValueError, match="class_names"):
+                Predictor.from_checkpoint(str(path), cfg)
+
+    def test_predict_rejects_non_float_dtype(self, tmp_path):
+        """predict rejects float64 and integer tensors with a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        pred = Predictor.from_checkpoint(str(_build_checkpoint(tmp_path, cfg)), cfg)
+        with pytest.raises(ValueError, match="float32 tensor"):
+            pred.predict(torch.randn(1, 3, 32, 32, dtype=torch.float64))
+        with pytest.raises(ValueError, match="float32 tensor"):
+            pred.predict(torch.ones(1, 3, 32, 32, dtype=torch.int32))
+
+    def test_predict_rejects_wrong_channels(self, tmp_path):
+        """predict rejects a (1, 1, H, W) tensor with a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        pred = Predictor.from_checkpoint(str(_build_checkpoint(tmp_path, cfg)), cfg)
+        with pytest.raises(ValueError, match="matching checkpoint input size"):
+            pred.predict(torch.randn(1, 1, 32, 32))
