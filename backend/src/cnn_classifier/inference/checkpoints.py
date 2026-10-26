@@ -35,6 +35,8 @@ def load_checkpoint(path: str | Path) -> dict:
         checkpoint = torch.load(path, weights_only=True, map_location="cpu")
     except Exception as exc:
         raise ValueError(f"not a valid torch checkpoint: {path}") from exc
+    if not isinstance(checkpoint, dict):
+        raise ValueError(f"not a valid torch checkpoint: {path}")
     missing = _REQUIRED_KEYS - set(checkpoint)
     if missing:
         raise ValueError(f"checkpoint missing required keys: {sorted(missing)}")

@@ -233,3 +233,78 @@ class TestFixRoundOne:
         )
         with pytest.raises(ValueError, match="class count"):
             Predictor.from_checkpoint(str(short), cfg)
+
+
+class TestFixRoundTwo:
+    """Fix-round-2: checkpoint config-shape + payload validation."""
+
+    @pytest.mark.parametrize(
+        "config_value",
+        [{}, {"model_name": "cnn_scratch"}, {"input_size": (32, 32)}],
+    )
+    def test_checkpoint_config_missing_inner_keys(self, tmp_path, config_value):
+        """Config dicts missing model_name/input_size raise a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        model = get_model("cnn_scratch", cfg)
+        path = tmp_path / "bad_inner.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": config_value,
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="malformed checkpoint config"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_checkpoint_config_not_a_dict(self, tmp_path):
+        """A non-dict config payload raises a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        model = get_model("cnn_scratch", cfg)
+        path = tmp_path / "config_list.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": ["a", "b"],
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="malformed checkpoint config"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_non_dict_checkpoint_payload_rejected(self, tmp_path):
+        """A bare-primitive checkpoint payload raises a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        path = tmp_path / "int.pt"
+        torch.save(5, path)
+        with pytest.raises(ValueError, match="not a valid torch checkpoint"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_architecture_mismatch_rejected(self, tmp_path):
+        """model_state tensors of the wrong architecture raise a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        wrong_state = TransferModel(
+            "resnet18", Config(device="cpu", input_size=(224, 224)), pretrained=False
+        ).state_dict()
+        path = tmp_path / "mismatch.pt"
+        torch.save(
+            {
+                "model_state": wrong_state,
+                "config": {"model_name": "cnn_scratch", "input_size": (32, 32)},
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="does not match recorded architecture"):
+            Predictor.from_checkpoint(str(path), cfg)

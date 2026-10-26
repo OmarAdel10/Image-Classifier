@@ -37,9 +37,18 @@ class Predictor:
         """
         checkpoint = load_checkpoint(path)
         ckpt_config = checkpoint["config"]
+        if (
+            not isinstance(ckpt_config, dict)
+            or "model_name" not in ckpt_config
+            or "input_size" not in ckpt_config
+        ):
+            raise ValueError(f"malformed checkpoint config: {ckpt_config!r}")
         model_config = Config(input_size=tuple(ckpt_config["input_size"]), device=config.device)
         model = get_model(ckpt_config["model_name"], model_config)
-        model.load_state_dict(checkpoint["model_state"])
+        try:
+            model.load_state_dict(checkpoint["model_state"])
+        except RuntimeError as exc:
+            raise ValueError("checkpoint model_state does not match recorded architecture") from exc
         model = model.to(config.device)
         model.eval()
         class_names = list(checkpoint["class_names"])

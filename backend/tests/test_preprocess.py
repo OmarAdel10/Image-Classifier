@@ -70,3 +70,13 @@ class TestFixRoundOnePreprocess:
         img = Image.new("RGB", (64, 100), color="blue")
         out = preprocess_image(img, (32, 48))
         assert out.shape == (1, 3, 32, 48)
+
+    def test_pixel_cap_boundary_at_cap_allowed(self):
+        """Exactly _MAX_IMAGE_PIXELS (2000x1000) is allowed - no off-by-one."""
+        out = preprocess_image(Image.new("RGB", (2000, 1000), color="green"), (32, 32))
+        assert out.shape == (1, 3, 32, 32)
+
+    def test_pixel_cap_boundary_just_over_rejected(self):
+        """One pixel over the cap (2000x1001) is rejected."""
+        with pytest.raises(ValueError, match="pixel cap"):
+            preprocess_image(Image.new("RGB", (2000, 1001), color="green"), (32, 32))

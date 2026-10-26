@@ -17,13 +17,15 @@ from cnn_classifier.data.dataset import CIFAR10_MEAN, CIFAR10_STD
 def preprocess_image(image: Image.Image, input_size: tuple) -> torch.Tensor:
     """Convert a PIL image to a normalized (1, C, H, W) tensor.
 
-    Args:
-        image: Input PIL image (any mode; non-RGB is converted).
-        input_size: Target (H, W) for the model input.
+        Args:
+            image: Input PIL image (any mode; non-RGB is converted).
+            input_size: Target (H, W) for the model input.
 
-    Returns:
-        Float tensor of shape (1, 3, H, W) normalized with the
-        CIFAR-10 mean/std statistics.
+        Returns:
+            Float tensor of shape (1, 3, H, W) normalized with the
+            CIFAR-10 mean/std statistics. The pixel cap is checked before
+    decode when given a lazily-opened PIL image; the serving layer must
+    pass lazily-opened images.
     """
     if image.width * image.height > _MAX_IMAGE_PIXELS:
         raise ValueError(
