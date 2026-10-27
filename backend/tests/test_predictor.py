@@ -497,3 +497,87 @@ class TestFixRoundFour:
         import cnn_classifier.inference as pkg
 
         assert set(pkg.__all__) == {"preprocess_image", "Prediction", "Predictor"}
+
+
+class TestFixRoundFive:
+    """Fix-round-5: model_name type guard, non-finite input, contract pins."""
+
+    @pytest.mark.parametrize("model_name", [["cnn_scratch"], 42, None])
+    def test_checkpoint_model_name_not_string_rejected(self, tmp_path, model_name):
+        """Non-string model_name payloads are rejected with a clean ValueError."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = tmp_path / "bad_name.pt"
+        torch.save(
+            {
+                "model_state": get_model("cnn_scratch", cfg).state_dict(),
+                "config": {"model_name": model_name, "input_size": [32, 32]},
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="malformed checkpoint config"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_predict_rejects_non_finite_input(self, tmp_path):
+        """NaN or Inf input tensors are rejected instead of predicting NaN."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        with pytest.raises(ValueError, match="non-finite"):
+            pred.predict(torch.full((1, 3, 32, 32), float("nan")))
+        with pytest.raises(ValueError, match="non-finite"):
+            pred.predict(torch.full((1, 3, 32, 32), float("inf")))
+
+    @pytest.mark.parametrize("input_size", [[-32, 32], [0, 32], [5000, 32]])
+    def test_checkpoint_input_size_out_of_range_rejected(self, tmp_path, input_size):
+        """Out-of-range but well-typed input_size is caught by the Config layer."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = tmp_path / "range.pt"
+        torch.save(
+            {
+                "model_state": get_model("cnn_scratch", cfg).state_dict(),
+                "config": {"model_name": "cnn_scratch", "input_size": input_size},
+                "class_names": list(cfg.class_names),
+            },
+            path,
+        )
+        with pytest.raises(ValueError):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_model_state_non_tensor_values_rejected(self, tmp_path):
+        """model_state dicts with non-tensor values hit the TypeError arm."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        ckpt = torch.load(path, weights_only=True)
+        ckpt["model_state"] = {key: "corrupt" for key in ckpt["model_state"]}
+        torch.save(ckpt, path)
+        with pytest.raises(ValueError, match="does not match recorded architecture"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_load_checkpoint_directory_and_path_arg(self, tmp_path):
+        """load_checkpoint rejects directories and accepts Path arguments."""
+        from pathlib import Path
+
+        from cnn_classifier.inference.checkpoints import load_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        with pytest.raises(ValueError, match="not a valid torch checkpoint"):
+            load_checkpoint(tmp_path)
+        path = _build_checkpoint(tmp_path, cfg)
+        loaded = load_checkpoint(Path(path))
+        assert {
+            "model_state",
+            "optimizer_state",
+            "epoch",
+            "best_val_acc",
+            "config",
+            "class_names",
+        } <= set(loaded)

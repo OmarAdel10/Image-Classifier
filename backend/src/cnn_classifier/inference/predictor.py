@@ -42,6 +42,7 @@ class Predictor:
             not isinstance(ckpt_config, dict)
             or "model_name" not in ckpt_config
             or "input_size" not in ckpt_config
+            or not isinstance(ckpt_config["model_name"], str)
             or not isinstance(ckpt_config["input_size"], (list, tuple))
             or len(ckpt_config["input_size"]) != 2
             or not all(
@@ -101,6 +102,8 @@ class Predictor:
             )
         if tensor.dtype != torch.float32:
             raise ValueError(f"expected a float32 tensor, got {tensor.dtype}")
+        if not torch.isfinite(tensor).all():
+            raise ValueError("non-finite input tensor values")
         tensor = tensor.to(self.device)
         with torch.no_grad():
             probabilities = torch.softmax(self.model(tensor), dim=1)[0]
