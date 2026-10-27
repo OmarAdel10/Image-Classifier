@@ -144,6 +144,7 @@ class TestFixRoundOne:
         assert len(results) == 10
         assert set(r.class_name for r in results) == set(names)
 
+    @pytest.mark.filterwarnings("ignore::UserWarning")
     def test_unsafe_pickle_rejected(self, tmp_path):
         """A valid pickle containing a disallowed object is rejected."""
         import pickle
@@ -581,3 +582,67 @@ class TestFixRoundFive:
             "config",
             "class_names",
         } <= set(loaded)
+
+
+class TestFixRoundSix:
+    """Fix-round-6: probe clamp, env decoupling, finite-weight probes."""
+
+    def test_probe_clamped_for_huge_input_size(self, tmp_path):
+        """A hostile huge input_size loads fast via the clamped probe."""
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        ckpt_cfg = Config(device="cpu", input_size=(2000, 1000), batch_size=1)
+        model = TransferModel("resnet18", ckpt_cfg, pretrained=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        names = [f"k{i}" for i in range(10)]
+        path = tmp_path / "huge.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "resnet18", ckpt_cfg, names)
+
+        pred = Predictor.from_checkpoint(str(path), Config(device="cpu", input_size=(32, 32)))
+        assert isinstance(pred.model, TransferModel)
+        assert pred.input_size == (2000, 1000)
+
+    def test_from_checkpoint_ignores_hostile_batch_size_env(self, tmp_path, monkeypatch):
+        """A hostile CNN_BATCH_SIZE env cannot veto legitimate checkpoints."""
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        monkeypatch.setenv("CNN_BATCH_SIZE", "512")
+        ckpt_cfg = Config(device="cpu", input_size=(500, 500), batch_size=1)
+        model = TransferModel("resnet18", ckpt_cfg, pretrained=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        path = tmp_path / "big500.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "resnet18", ckpt_cfg, cfg.class_names)
+
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        assert pred.input_size == (500, 500)
+
+    def test_huge_finite_weights_rejected(self, tmp_path):
+        """Finite-but-huge weights overflow the ones-probe at load time."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        ckpt = torch.load(path, weights_only=True)
+        ckpt["model_state"] = {
+            key: torch.full_like(value, 3e38) for key, value in ckpt["model_state"].items()
+        }
+        torch.save(ckpt, path)
+        with pytest.raises(ValueError, match="non-finite"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_predict_rejects_non_finite_probabilities(self, tmp_path):
+        """NaN/Inf probabilities raise instead of reaching the serving layer."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        state = model.state_dict()
+        state["head.4.weight"].fill_(float("inf"))
+        model.load_state_dict(state)
+        model.eval()
+        pred = Predictor(model, list(cfg.class_names), "cpu", (32, 32))
+        with pytest.raises(ValueError, match="non-finite probabilities"):
+            pred.predict(torch.randn(1, 3, 32, 32))

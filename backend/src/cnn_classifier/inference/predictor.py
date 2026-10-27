@@ -55,6 +55,8 @@ class Predictor:
             device=config.device,
             model_path=config.model_path,
             labels_path=config.labels_path,
+            batch_size=1,
+            num_workers=0,
         )
         if not isinstance(checkpoint["model_state"], dict):
             raise ValueError("checkpoint model_state does not match recorded architecture")
@@ -70,8 +72,9 @@ class Predictor:
         ):
             raise ValueError("malformed checkpoint contents: class_names must be a list of strings")
         class_names = list(checkpoint["class_names"])
+        probe_size = tuple(min(dim, 512) for dim in model_config.input_size)
         with torch.no_grad():
-            probe = model(torch.zeros(1, 3, *model_config.input_size, device=config.device))
+            probe = model(torch.ones(1, 3, *probe_size, device=config.device))
         if len(class_names) != probe.shape[1]:
             raise ValueError(f"class count {len(class_names)} != model outputs {probe.shape[1]}")
         if not torch.isfinite(probe).all():
@@ -107,6 +110,8 @@ class Predictor:
         tensor = tensor.to(self.device)
         with torch.no_grad():
             probabilities = torch.softmax(self.model(tensor), dim=1)[0]
+        if not torch.isfinite(probabilities).all():
+            raise ValueError("model produced non-finite probabilities")
         ranked = torch.argsort(probabilities, descending=True)
         return [
             Prediction(self.class_names[int(index)], float(probabilities[int(index)]))
