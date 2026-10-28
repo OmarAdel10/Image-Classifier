@@ -87,3 +87,29 @@ class TestFixRoundOnePreprocess:
         Image.new("RGB", (2000, 1001), color="green").save(img_path)
         with pytest.raises(ValueError, match="pixel cap"):
             preprocess_image(Image.open(img_path), (32, 32))
+
+
+class TestFixRoundSevenPreprocess:
+    """Fix-round-7: mode-conversion flavors + upscale path."""
+
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            ("RGBA", (255, 0, 0, 255)),
+            ("L", 128),
+            ("P", 0),
+            ("CMYK", (0, 0, 0, 255)),
+            ("LA", (128, 255)),
+        ],
+    )
+    def test_preprocess_converts_palette_modes(self, mode):
+        """All non-RGB modes convert to a 3-channel normalized tensor."""
+        kind, fill = mode
+        img = Image.new(kind, (64, 48), fill)
+        out = preprocess_image(img, (32, 32))
+        assert out.shape == (1, 3, 32, 32)
+
+    def test_preprocess_upscales_small_source(self):
+        """Sources smaller than the target upscale to the target size."""
+        out = preprocess_image(Image.new("RGB", (16, 16), color="red"), (32, 32))
+        assert out.shape == (1, 3, 32, 32)

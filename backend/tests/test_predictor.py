@@ -646,3 +646,150 @@ class TestFixRoundSix:
         pred = Predictor(model, list(cfg.class_names), "cpu", (32, 32))
         with pytest.raises(ValueError, match="non-finite probabilities"):
             pred.predict(torch.randn(1, 3, 32, 32))
+
+
+class TestFixRoundSeven:
+    """Fix-round-7: probe-clamp pin + edge-contract pins from coverage review."""
+
+    def test_probe_input_clamped_to_512_bound(self, tmp_path, monkeypatch):
+        """The load probe runs at min(dim, 512) per dimension, not the raw size."""
+        import cnn_classifier.inference.predictor as predictor_module
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        ckpt_cfg = Config(device="cpu", input_size=(2000, 1000), batch_size=1)
+        model = TransferModel("resnet18", ckpt_cfg, pretrained=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        path = tmp_path / "huge_probe.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "resnet18", ckpt_cfg, ckpt_cfg.class_names)
+
+        recorded = []
+        real_get_model = predictor_module.get_model
+
+        def spy_get_model(name, config, pretrained=True):
+            built = real_get_model(name, config, pretrained)
+            built.register_forward_pre_hook(
+                lambda module, args: recorded.append(tuple(args[0].shape))
+            )
+            return built
+
+        monkeypatch.setattr(predictor_module, "get_model", spy_get_model)
+        pred = Predictor.from_checkpoint(str(path), Config(device="cpu", input_size=(32, 32)))
+        assert recorded == [(1, 3, 512, 512)]
+        assert pred.input_size == (2000, 1000)
+
+    def test_probe_unclamped_below_512(self, tmp_path, monkeypatch):
+        """Probe runs at the recorded size when it is already below the clamp."""
+        import cnn_classifier.inference.predictor as predictor_module
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        ckpt_cfg = Config(device="cpu", input_size=(64, 64), batch_size=1)
+        model = TransferModel("resnet18", ckpt_cfg, pretrained=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        path = tmp_path / "small_probe.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "resnet18", ckpt_cfg, ckpt_cfg.class_names)
+
+        recorded = []
+        real_get_model = predictor_module.get_model
+
+        def spy_get_model(name, config, pretrained=True):
+            built = real_get_model(name, config, pretrained)
+            built.register_forward_pre_hook(
+                lambda module, args: recorded.append(tuple(args[0].shape))
+            )
+            return built
+
+        monkeypatch.setattr(predictor_module, "get_model", spy_get_model)
+        pred = Predictor.from_checkpoint(str(path), Config(device="cpu", input_size=(32, 32)))
+        assert recorded == [(1, 3, 64, 64)]
+        assert pred.input_size == (64, 64)
+
+    def test_from_checkpoint_accepts_path_object(self, tmp_path):
+        """from_checkpoint accepts a pathlib.Path argument end to end."""
+        from pathlib import Path
+
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        pred = Predictor.from_checkpoint(Path(_build_checkpoint(tmp_path, cfg)), cfg)
+        results = pred.predict(torch.randn(1, 3, 32, 32))
+        assert len(results) == 10
+
+    def test_class_count_mismatch_long_rejected(self, tmp_path):
+        """More class names than model outputs is also rejected cleanly."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        path = tmp_path / "eleven.pt"
+        torch.save(
+            {
+                "model_state": model.state_dict(),
+                "config": {"model_name": "cnn_scratch", "input_size": [32, 32]},
+                "class_names": [f"n{i}" for i in range(11)],
+            },
+            path,
+        )
+        with pytest.raises(ValueError, match="class count"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_direct_construction_coerces_input_size_tuple(self):
+        """Direct Predictor construction coerces list input_size to a tuple."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        pred = Predictor(model, list(cfg.class_names), "cpu", [32, 32])
+        assert pred.input_size == (32, 32)
+
+    def test_predict_rejects_empty_batch(self, tmp_path):
+        """A zero-sized batch falls into the single-image rejection branch."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        pred = Predictor.from_checkpoint(str(_build_checkpoint(tmp_path, cfg)), cfg)
+        with pytest.raises(ValueError, match="single-image"):
+            pred.predict(torch.randn(0, 3, 32, 32))
+
+    def test_zero_byte_checkpoint_rejected(self, tmp_path):
+        """An empty file is rejected as an invalid checkpoint."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        empty = tmp_path / "empty.pt"
+        empty.write_bytes(b"")
+        with pytest.raises(ValueError, match="not a valid torch checkpoint"):
+            Predictor.from_checkpoint(str(empty), cfg)
+
+    def test_vgg16_provenance_rebuild(self, tmp_path):
+        """vgg16 checkpoints rebuild through the real serving path."""
+        from cnn_classifier.inference.predictor import Predictor
+        from cnn_classifier.models.transfer import TransferModel
+
+        ckpt_cfg = Config(device="cpu", input_size=(224, 224), batch_size=1)
+        model = TransferModel("vgg16", ckpt_cfg, pretrained=False)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        names = [f"v{i}" for i in range(10)]
+        path = tmp_path / "vgg.pt"
+        save_checkpoint(path, model, opt, 1, 0.5, "vgg16", ckpt_cfg, names)
+
+        drifted = Config(device="cpu", input_size=(32, 32))
+        pred = Predictor.from_checkpoint(str(path), drifted)
+        assert isinstance(pred.model, TransferModel)
+        assert pred.input_size == (224, 224)
+        results = pred.predict(torch.randn(1, 3, 224, 224))
+        assert len(results) == 10
+        assert set(r.class_name for r in results) == set(names)
+
+    def test_from_checkpoint_ignores_hostile_input_size_env(self, tmp_path, monkeypatch):
+        """A hostile CNN_INPUT_SIZE env cannot override checkpoint provenance."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        monkeypatch.setenv("CNN_INPUT_SIZE", "[16, 16]")
+        path = _build_checkpoint(tmp_path, cfg)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        assert pred.input_size == (32, 32)
+        results = pred.predict(torch.randn(1, 3, 32, 32))
+        assert len(results) == 10
