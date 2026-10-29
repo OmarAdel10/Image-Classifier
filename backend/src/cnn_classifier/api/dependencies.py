@@ -1,4 +1,10 @@
-"""FastAPI dependency providers (Task 6)."""
+"""FastAPI dependency providers (Task 6).
+
+Testing utilities:
+    clear_predictor_cache() -- Clears the lru_cache on get_predictor() to allow
+    reloading a different checkpoint between tests. Call in test fixtures or
+    test setup/teardown when you need a fresh predictor instance.
+"""
 
 from functools import lru_cache
 

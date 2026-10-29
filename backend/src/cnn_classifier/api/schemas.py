@@ -34,4 +34,4 @@ class ModelInfoResponse(BaseModel):
     input_size: str
     classes: list[str]
     device: str
-    trained_at: datetime | None = None
+    trained_at: datetime | None = Field(default=None)

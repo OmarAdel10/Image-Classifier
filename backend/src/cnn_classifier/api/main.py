@@ -10,6 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import ValidationError
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from cnn_classifier.api.dependencies import ModelUnavailableError, get_predictor
 from cnn_classifier.api.schemas import (
@@ -25,9 +28,15 @@ logger = logging.getLogger(__name__)
 
 # Match the Flutter client's 10 MiB upload ceiling.
 _MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+# Dev-only: allows any localhost/127.0.0.1 port. Production should use explicit allowlist.
 _LOCAL_ORIGIN_REGEX = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 
+# Rate limiter: 30 requests/minute per IP for /predict (prevents DoS via concurrent 10MB uploads).
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(title="Image Classifier API", version="0.1.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=_LOCAL_ORIGIN_REGEX,
@@ -57,13 +66,17 @@ def health() -> HealthResponse:
 
 
 @app.post("/predict", response_model=PredictionResponse)
+@limiter.limit("30/minute")
 def predict(
+    request: Request,
     file: UploadFile = File(...),
     predictor: Predictor = Depends(get_predictor),
 ) -> PredictionResponse:
     """Classify one uploaded image and return ranked predictions.
 
     The full ranked distribution is returned; clients slice their top-k.
+
+    Rate limited: 30 requests/minute per IP.
     """
     content_type = (file.content_type or "").lower()
     if not content_type.startswith("image/"):
@@ -84,7 +97,7 @@ def predict(
 
     try:
         predictions = predictor.predict(tensor)
-    except Exception as exc:
+    except (RuntimeError, ValueError, OSError) as exc:
         logger.exception("model inference failed")
         raise HTTPException(status_code=500, detail="model inference failed") from exc
 

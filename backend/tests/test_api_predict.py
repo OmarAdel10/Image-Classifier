@@ -164,16 +164,16 @@ class TestPredict:
         assert response.status_code == 400
         assert response.json()["detail"] == "file must be an image"
 
-    def test_predict_rejects_missing_content_type(self):
-        """A direct UploadFile with no Content-Type header is rejected."""
-        from fastapi import HTTPException, UploadFile
-
-        upload = UploadFile(file=io.BytesIO(_png_bytes()), filename="cat.png")
-        assert upload.content_type is None
-        with pytest.raises(HTTPException) as exc_info:
-            api_main.predict(file=upload, predictor=FakePredictor())
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "file must be an image"
+    def test_predict_accepts_missing_explicit_content_type(self, client):
+        """UploadFile with no explicit Content-Type is accepted (inferred from filename)."""
+        test_client, _ = client
+        # No content-type provided; TestClient infers from .png extension
+        response = test_client.post(
+            "/predict",
+            files={"file": ("cat.png", _png_bytes())},  # No content-type
+        )
+        assert response.status_code == 200
+        assert response.json()["model"] == "cnn_scratch"
 
     def test_predict_rejects_empty_file(self, client):
         test_client, _ = client
