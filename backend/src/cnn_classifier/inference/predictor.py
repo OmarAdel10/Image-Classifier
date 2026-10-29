@@ -15,11 +15,22 @@ Prediction = namedtuple("Prediction", ["class_name", "confidence"])
 class Predictor:
     """Runs a rebuilt model on preprocessed image tensors."""
 
-    def __init__(self, model, class_names: list, device: str, input_size: tuple) -> None:
+    def __init__(
+        self,
+        model,
+        class_names: list,
+        device: str,
+        input_size: tuple,
+        *,
+        model_name: str,
+        checkpoint_path: str | Path | None = None,
+    ) -> None:
         self.model = model
         self.class_names = class_names
         self.device = device
         self.input_size = tuple(input_size)
+        self.model_name = model_name
+        self.checkpoint_path = Path(checkpoint_path) if checkpoint_path is not None else None
 
     @classmethod
     def from_checkpoint(cls, path: str | Path, config: Config) -> "Predictor":
@@ -79,7 +90,14 @@ class Predictor:
             raise ValueError(f"class count {len(class_names)} != model outputs {probe.shape[1]}")
         if not torch.isfinite(probe).all():
             raise ValueError("checkpoint weights produce non-finite outputs")
-        return cls(model, class_names, config.device, tuple(ckpt_config["input_size"]))
+        return cls(
+            model,
+            class_names,
+            config.device,
+            tuple(ckpt_config["input_size"]),
+            model_name=ckpt_config["model_name"],
+            checkpoint_path=path,
+        )
 
     def predict(self, tensor: torch.Tensor) -> list[Prediction]:
         """Classify one preprocessed image tensor.

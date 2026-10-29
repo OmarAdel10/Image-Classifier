@@ -78,6 +78,16 @@ class TestPredictor:
         pred = Predictor.from_checkpoint(str(path), cfg)
         assert pred.model.training is False
 
+    def test_exposes_checkpoint_provenance(self, tmp_path):
+        """Predictor exposes model name and checkpoint path for /model-info."""
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", input_size=(32, 32))
+        path = _build_checkpoint(tmp_path, cfg)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        assert pred.model_name == "cnn_scratch"
+        assert pred.checkpoint_path == path
+
     def test_rejects_batch_size_above_one(self, tmp_path):
         """predict only accepts a single-image tensor (1, C, H, W)."""
         from cnn_classifier.inference.predictor import Predictor
@@ -643,7 +653,7 @@ class TestFixRoundSix:
         state["head.4.weight"].fill_(float("inf"))
         model.load_state_dict(state)
         model.eval()
-        pred = Predictor(model, list(cfg.class_names), "cpu", (32, 32))
+        pred = Predictor(model, list(cfg.class_names), "cpu", (32, 32), model_name="cnn_scratch")
         with pytest.raises(ValueError, match="non-finite probabilities"):
             pred.predict(torch.randn(1, 3, 32, 32))
 
@@ -740,7 +750,7 @@ class TestFixRoundSeven:
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
         model = get_model("cnn_scratch", cfg)
-        pred = Predictor(model, list(cfg.class_names), "cpu", [32, 32])
+        pred = Predictor(model, list(cfg.class_names), "cpu", [32, 32], model_name="cnn_scratch")
         assert pred.input_size == (32, 32)
 
     def test_predict_rejects_empty_batch(self, tmp_path):
