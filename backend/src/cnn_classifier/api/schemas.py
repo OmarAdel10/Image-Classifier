@@ -16,7 +16,7 @@ class PredictionItem(BaseModel):
     """One class prediction with its softmax confidence."""
 
     class_name: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0, allow_inf_nan=False)
 
 
 class PredictionResponse(BaseModel):
