@@ -13,6 +13,10 @@ dependencies = [
     "torch>=2.6.0,<3.0.0",
     "torchvision>=0.21.0,<1.0.0",
     "pillow>=10.4.0,<13.0.0",
+    # Required by FastAPI for multipart/form-data uploads (/predict).
+    "python-multipart>=0.0.18,<1.0.0",
+    # Rate limiting for /predict endpoint (DoS mitigation).
+    "slowapi>=0.1.9,<1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +39,9 @@ pythonpath = ["."]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [tool.ruff]
 line-length = 100
