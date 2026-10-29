@@ -7,6 +7,10 @@ from cnn_classifier.config import get_config as _get_config
 from cnn_classifier.inference.predictor import Predictor
 
 
+class ModelUnavailableError(RuntimeError):
+    """The configured checkpoint could not be loaded."""
+
+
 def get_config() -> Config:
     """Return the process-wide Config singleton."""
     return _get_config()
@@ -17,11 +21,15 @@ def get_predictor() -> Predictor:
     """Load the configured checkpoint once and reuse it for all requests.
 
     Raises:
-        FileNotFoundError: If the configured checkpoint does not exist.
-        ValueError: If the checkpoint is corrupt or malformed.
+        ModelUnavailableError: If the checkpoint is missing, corrupt, or
+            otherwise cannot be loaded. The original error is chained as
+            the cause for server-side logs.
     """
     config = get_config()
-    return Predictor.from_checkpoint(config.model_path_resolved, config)
+    try:
+        return Predictor.from_checkpoint(config.model_path_resolved, config)
+    except Exception as exc:  # Boundary: any load failure means no model.
+        raise ModelUnavailableError("model unavailable") from exc
 
 
 def clear_predictor_cache() -> None:

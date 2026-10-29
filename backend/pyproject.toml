@@ -14,7 +14,7 @@ dependencies = [
     "torchvision>=0.21.0,<1.0.0",
     "pillow>=10.4.0,<13.0.0",
     # Required by FastAPI for multipart/form-data uploads (/predict).
-    "python-multipart>=0.0.7,<1.0.0",
+    "python-multipart>=0.0.18,<1.0.0",
 ]
 
 [project.optional-dependencies]

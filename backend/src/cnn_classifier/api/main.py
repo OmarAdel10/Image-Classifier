@@ -5,11 +5,13 @@ import logging
 import time
 from datetime import UTC, datetime
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from PIL import Image, UnidentifiedImageError
+from pydantic import ValidationError
 
-from cnn_classifier.api.dependencies import get_predictor
+from cnn_classifier.api.dependencies import ModelUnavailableError, get_predictor
 from cnn_classifier.api.schemas import (
     HealthResponse,
     ModelInfoResponse,
@@ -32,6 +34,20 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(ModelUnavailableError)
+async def model_unavailable(request: Request, exc: ModelUnavailableError) -> JSONResponse:
+    """Map checkpoint load failures to a sanitized 503 response."""
+    logger.error("model unavailable at %s: %s", request.url.path, exc.__cause__)
+    return JSONResponse(status_code=503, content={"detail": "model unavailable"})
+
+
+@app.exception_handler(ValidationError)
+async def validation_error(request: Request, exc: ValidationError) -> JSONResponse:
+    """Map response validation errors to a sanitized 500 response."""
+    logger.error("response validation error at %s: %s", request.url.path, exc)
+    return JSONResponse(status_code=500, content={"detail": "model inference failed"})
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -98,7 +114,7 @@ def model_info(predictor: Predictor = Depends(get_predictor)) -> ModelInfoRespon
             trained_at = None
     return ModelInfoResponse(
         model=predictor.model_name,
-        input_size=list(predictor.input_size),
+        input_size="x".join(str(dimension) for dimension in predictor.input_size),
         classes=list(predictor.class_names),
         device=predictor.device,
         trained_at=trained_at,

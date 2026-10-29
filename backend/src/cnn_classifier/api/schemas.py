@@ -31,7 +31,7 @@ class ModelInfoResponse(BaseModel):
     """Metadata about the checkpoint currently served."""
 
     model: str
-    input_size: list[int]
+    input_size: str
     classes: list[str]
     device: str
     trained_at: datetime | None = None
