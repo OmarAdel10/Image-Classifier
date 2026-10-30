@@ -21,6 +21,11 @@ class ApiException implements Exception {
 
 /// Client for communicating with the FastAPI backend.
 class ApiClient {
+  /// Creates an [ApiClient] with the given [client], optional [baseUrl], and [timeout].
+  ///
+  /// The [client] is owned by the caller and should be disposed by the caller.
+  /// If [baseUrl] is not provided, uses [Config.apiBaseUrl].
+  /// If [timeout] is not provided, uses [Config.requestTimeout].
   ApiClient({required this.client, String? baseUrl, Duration? timeout})
     : _baseUrl = baseUrl ?? Config.apiBaseUrl,
       _timeout = timeout ?? Config.requestTimeout;
@@ -49,7 +54,7 @@ class ApiClient {
 
   /// Gets model metadata from the backend.
   Future<ModelInfo> getModelInfo() async {
-    try {
+    return _handleRequest(() async {
       final response = await client
           .get(Uri.parse('$_baseUrl/model-info'))
           .timeout(_timeout);
@@ -57,37 +62,50 @@ class ApiClient {
       if (response.statusCode == 200) {
         return ModelInfo.fromJson(_parseJsonMap(response.body));
       }
-      throw ApiException(
-        message: _parseErrorMessage(response.body),
-        statusCode: response.statusCode,
-      );
-    } on TimeoutException catch (_) {
-      throw const ApiException(message: 'Request timed out', statusCode: 408);
-    } on SocketException catch (_) {
-      throw const ApiException(message: 'Network error', statusCode: 503);
-    } on HttpException catch (_) {
-      throw const ApiException(message: 'HTTP error', statusCode: 502);
-    }
+      throw _toApiException(response);
+    });
   }
 
   /// Classifies an image and returns ranked predictions.
   Future<PredictionResponse> predict(File imageFile) async {
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$_baseUrl/predict'),
-    )..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
+    return _handleRequest(() async {
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('$_baseUrl/predict'),
+      )..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
 
-    try {
       final streamedResponse = await client.send(request).timeout(_timeout);
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {
         return PredictionResponse.fromJson(_parseJsonMap(response.body));
       }
-      throw ApiException(
-        message: _parseErrorMessage(response.body),
-        statusCode: response.statusCode,
-      );
+      throw _toApiException(response);
+    });
+  }
+
+  /// Predicts using an [XFile] (from image_picker/file_picker).
+  ///
+  /// Uses [XFile.path] for file upload. On platforms where path is unavailable
+  /// (e.g., web), the caller should use [predict] with bytes directly.
+  Future<PredictionResponse> predictXFile(XFile xFile) async {
+    return predict(File(xFile.path));
+  }
+
+  /// Closes the underlying [http.Client] if it was created by this instance.
+  ///
+  /// Call this when the [ApiClient] is no longer needed to free resources.
+  /// Note: If the [client] was provided by the caller, the caller is responsible
+  /// for disposing it. This method only disposes if the client was created
+  /// internally (which this class does not do by default).
+  Future<void> dispose() async {
+    // No-op by default — caller owns the client lifecycle.
+    // Override in a subclass if internal client management is added.
+  }
+
+  Future<T> _handleRequest<T>(Future<T> Function() request) async {
+    try {
+      return await request();
     } on TimeoutException catch (_) {
       throw const ApiException(message: 'Request timed out', statusCode: 408);
     } on SocketException catch (_) {
@@ -97,9 +115,11 @@ class ApiClient {
     }
   }
 
-  /// Predicts using an [XFile] (from image_picker/file_picker).
-  Future<PredictionResponse> predictXFile(XFile xFile) async {
-    return predict(File(xFile.path));
+  ApiException _toApiException(http.Response response) {
+    return ApiException(
+      message: _parseErrorMessage(response.body),
+      statusCode: response.statusCode,
+    );
   }
 
   dynamic _parseJson(String body) {

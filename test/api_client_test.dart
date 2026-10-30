@@ -327,4 +327,307 @@ void main() {
       expect(exception.toString(), contains('model unavailable'));
     });
   });
+
+  group('PredictionItem equality & hashCode & toString', () {
+    const item1 = PredictionItem(className: 'cat', confidence: 0.95);
+    const item2 = PredictionItem(className: 'cat', confidence: 0.95);
+    const item3 = PredictionItem(className: 'dog', confidence: 0.95);
+    const item4 = PredictionItem(className: 'cat', confidence: 0.8);
+
+    test('identical instances are equal', () {
+      expect(item1 == item2, isTrue);
+      expect(item1.hashCode, item2.hashCode);
+    });
+
+    test('different className are not equal', () {
+      expect(item1 == item3, isFalse);
+    });
+
+    test('different confidence are not equal', () {
+      expect(item1 == item4, isFalse);
+    });
+
+    test('different runtimeType returns false', () {
+      expect(item1 == 'not a prediction' as Object, isFalse);
+    });
+
+    test('toString contains className and confidence', () {
+      const item = PredictionItem(className: 'cat', confidence: 0.95);
+      expect(item.toString(), contains('cat'));
+      expect(item.toString(), contains('0.95'));
+    });
+  });
+
+  group('PredictionItem fromJson error handling', () {
+    test('throws on missing class_name', () {
+      expect(
+        () => PredictionItem.fromJson({'confidence': 0.5}),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
+    test('throws on missing confidence', () {
+      expect(
+        () => PredictionItem.fromJson({'class_name': 'cat'}),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
+    test('throws when confidence is not a number', () {
+      expect(
+        () => PredictionItem.fromJson({
+          'class_name': 'cat',
+          'confidence': 'high',
+        }),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
+    test('clamps confidence to [0, 1] range', () {
+      final itemHigh = PredictionItem.fromJson({
+        'class_name': 'cat',
+        'confidence': 1.5,
+      });
+      expect(itemHigh.confidence, 1.0);
+      final itemLow = PredictionItem.fromJson({
+        'class_name': 'cat',
+        'confidence': -0.5,
+      });
+      expect(itemLow.confidence, 0.0);
+    });
+  });
+
+  group('PredictionResponse equality & hashCode & toString', () {
+    const pred1 = PredictionItem(className: 'cat', confidence: 0.9);
+    const pred2 = PredictionItem(className: 'dog', confidence: 0.1);
+    const resp1 = PredictionResponse(
+      predictions: [pred1, pred2],
+      latencyMs: 42.0,
+      model: 'cnn_scratch',
+    );
+    const resp2 = PredictionResponse(
+      predictions: [pred1, pred2],
+      latencyMs: 42.0,
+      model: 'cnn_scratch',
+    );
+    const resp3 = PredictionResponse(
+      predictions: [pred2, pred1],
+      latencyMs: 42.0,
+      model: 'cnn_scratch',
+    );
+    const resp4 = PredictionResponse(
+      predictions: [pred1],
+      latencyMs: 42.0,
+      model: 'cnn_scratch',
+    );
+    const resp5 = PredictionResponse(
+      predictions: [pred1, pred2],
+      latencyMs: 43.0,
+      model: 'cnn_scratch',
+    );
+    const resp6 = PredictionResponse(
+      predictions: [pred1, pred2],
+      latencyMs: 42.0,
+      model: 'resnet18',
+    );
+
+    test('identical instances are equal', () {
+      expect(resp1 == resp2, isTrue);
+      expect(resp1.hashCode, resp2.hashCode);
+    });
+
+    test('different predictions order are not equal', () {
+      expect(resp1 == resp3, isFalse);
+    });
+
+    test('different predictions list are not equal', () {
+      expect(resp1 == resp4, isFalse);
+    });
+
+    test('different latencyMs are not equal', () {
+      expect(resp1 == resp5, isFalse);
+    });
+
+    test('different model are not equal', () {
+      expect(resp1 == resp6, isFalse);
+    });
+
+    test('different runtimeType returns false', () {
+      expect(resp1 == 'not a response' as Object, isFalse);
+    });
+
+    test('toString contains all fields', () {
+      expect(resp1.toString(), contains('cat'));
+      expect(resp1.toString(), contains('42.0'));
+      expect(resp1.toString(), contains('cnn_scratch'));
+    });
+  });
+
+  group('PredictionResponse fromJson error handling', () {
+    test('handles empty predictions list', () {
+      final json = {'predictions': [], 'latency_ms': 10.0, 'model': 'test'};
+      final r = PredictionResponse.fromJson(json);
+      expect(r.predictions, isEmpty);
+    });
+
+    test('throws on invalid prediction item', () {
+      final json = {
+        'predictions': [
+          {'invalid': 'item'},
+        ],
+        'latency_ms': 10.0,
+        'model': 'test',
+      };
+      expect(
+        () => PredictionResponse.fromJson(json),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
+    test('throws on missing latency_ms', () {
+      final json = {'predictions': [], 'model': 'test'};
+      expect(
+        () => PredictionResponse.fromJson(json),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
+    test('throws on missing model', () {
+      final json = {'predictions': [], 'latency_ms': 10.0};
+      expect(
+        () => PredictionResponse.fromJson(json),
+        throwsA(isA<TypeError>()),
+      );
+    });
+  });
+
+  group('ModelInfo equality & hashCode & toString', () {
+    final info1 = ModelInfo(
+      modelName: 'cnn_scratch',
+      inputSize: '32x32',
+      classes: ['cat', 'dog'],
+      device: 'cpu',
+      trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
+    );
+    final info2 = ModelInfo(
+      modelName: 'cnn_scratch',
+      inputSize: '32x32',
+      classes: ['cat', 'dog'],
+      device: 'cpu',
+      trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
+    );
+    final info3 = ModelInfo(
+      modelName: 'resnet18',
+      inputSize: '32x32',
+      classes: ['cat', 'dog'],
+      device: 'cpu',
+      trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
+    );
+    final info4 = ModelInfo(
+      modelName: 'cnn_scratch',
+      inputSize: '224x224',
+      classes: ['cat', 'dog'],
+      device: 'cpu',
+      trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
+    );
+    final info5 = ModelInfo(
+      modelName: 'cnn_scratch',
+      inputSize: '32x32',
+      classes: ['dog', 'cat'],
+      device: 'cpu',
+      trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
+    );
+    final info6 = ModelInfo(
+      modelName: 'cnn_scratch',
+      inputSize: '32x32',
+      classes: ['cat', 'dog'],
+      device: 'cuda',
+      trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
+    );
+    final info7 = ModelInfo(
+      modelName: 'cnn_scratch',
+      inputSize: '32x32',
+      classes: ['cat', 'dog'],
+      device: 'cpu',
+      trainedAt: null,
+    );
+
+    test('identical instances are equal', () {
+      expect(info1 == info2, isTrue);
+      expect(info1.hashCode, info2.hashCode);
+    });
+
+    test('different modelName are not equal', () {
+      expect(info1 == info3, isFalse);
+    });
+
+    test('different inputSize are not equal', () {
+      expect(info1 == info4, isFalse);
+    });
+
+    test('different classes order are not equal', () {
+      expect(info1 == info5, isFalse);
+    });
+
+    test('different device are not equal', () {
+      expect(info1 == info6, isFalse);
+    });
+
+    test('null trainedAt vs non-null are not equal', () {
+      expect(info1 == info7, isFalse);
+    });
+
+    test('different runtimeType returns false', () {
+      expect(info1 == 'not a model info' as Object, isFalse);
+    });
+
+    test('toString contains all fields', () {
+      expect(info1.toString(), contains('cnn_scratch'));
+      expect(info1.toString(), contains('32x32'));
+      expect(info1.toString(), contains('cpu'));
+    });
+  });
+
+  group('ModelInfo fromJson error handling', () {
+    test('throws on missing required fields', () {
+      expect(() => ModelInfo.fromJson({}), throwsA(isA<TypeError>()));
+      expect(
+        () => ModelInfo.fromJson({'model': 'x'}),
+        throwsA(isA<TypeError>()),
+      );
+    });
+
+    test('throws when classes is not a list', () {
+      final json = {
+        'model': 'x',
+        'input_size': '32x32',
+        'classes': 'not-a-list',
+        'device': 'cpu',
+      };
+      expect(() => ModelInfo.fromJson(json), throwsA(isA<TypeError>()));
+    });
+
+    test('handles invalid trained_at format gracefully', () {
+      final json = {
+        'model': 'x',
+        'input_size': '32x32',
+        'classes': [],
+        'device': 'cpu',
+        'trained_at': 'not-a-date',
+      };
+      final info = ModelInfo.fromJson(json);
+      expect(info.trainedAt, isNull);
+    });
+
+    test('handles missing trained_at gracefully', () {
+      final json = {
+        'model': 'x',
+        'input_size': '32x32',
+        'classes': [],
+        'device': 'cpu',
+      };
+      final info = ModelInfo.fromJson(json);
+      expect(info.trainedAt, isNull);
+    });
+  });
 }

@@ -3,9 +3,10 @@ class PredictionItem {
   const PredictionItem({required this.className, required this.confidence});
 
   factory PredictionItem.fromJson(Map<String, dynamic> json) {
+    final confidence = (json['confidence'] as num).toDouble();
     return PredictionItem(
       className: json['class_name'] as String,
-      confidence: (json['confidence'] as num).toDouble(),
+      confidence: confidence.clamp(0.0, 1.0),
     );
   }
 

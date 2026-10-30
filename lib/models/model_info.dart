@@ -12,7 +12,7 @@ class ModelInfo {
     DateTime? trainedAt;
     final trainedAtJson = json['trained_at'];
     if (trainedAtJson != null) {
-      trainedAt = DateTime.parse(trainedAtJson as String).toLocal();
+      trainedAt = DateTime.tryParse(trainedAtJson as String)?.toLocal();
     }
 
     return ModelInfo(
@@ -53,15 +53,27 @@ class ModelInfo {
           runtimeType == other.runtimeType &&
           modelName == other.modelName &&
           inputSize == other.inputSize &&
-          classes == other.classes &&
+          _listEquals(classes, other.classes) &&
           device == other.device &&
           trainedAt == other.trainedAt;
 
+  bool _listEquals(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   @override
-  int get hashCode =>
-      modelName.hashCode ^
-      inputSize.hashCode ^
-      classes.hashCode ^
-      device.hashCode ^
-      trainedAt.hashCode;
+  int get hashCode {
+    int result = modelName.hashCode;
+    result = 31 * result + inputSize.hashCode;
+    for (final cls in classes) {
+      result = 31 * result + cls.hashCode;
+    }
+    result = 31 * result + device.hashCode;
+    result = 31 * result + (trainedAt?.hashCode ?? 0);
+    return result;
+  }
 }
