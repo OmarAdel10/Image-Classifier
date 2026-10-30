@@ -41,7 +41,8 @@ class HomeScreen extends StatelessWidget {
                     const SizedBox(height: 24),
                     if (provider.state is PredictionStateResult)
                       _ResultPreview(
-                        response: (provider.state as PredictionStateResult).response,
+                        response:
+                            (provider.state as PredictionStateResult).response,
                       ),
                   ],
                 ),
@@ -145,7 +146,8 @@ class _ResultPreview extends StatelessWidget {
                     children: [
                       Text(
                         'Classification Complete',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
                               fontWeight: FontWeight.bold,
                               color: Colors.green.shade700,
                             ),
@@ -153,8 +155,8 @@ class _ResultPreview extends StatelessWidget {
                       Text(
                         'Top: ${topPrediction.className} (${(topPrediction.confidence * 100).toStringAsFixed(1)}%)',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
-                            ),
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ],
                   ),
@@ -173,7 +175,9 @@ class _ResultPreview extends StatelessWidget {
               style: TextStyle(fontWeight: FontWeight.w600, fontSize: 16),
             ),
             const SizedBox(height: 8),
-            ...response.predictions.take(3).map((pred) => _PredictionTile(prediction: pred)),
+            ...response.predictions
+                .take(3)
+                .map((pred) => _PredictionTile(prediction: pred)),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: () {
@@ -198,7 +202,7 @@ class _ResultPreview extends StatelessWidget {
             ),
           ],
         ),
-      )
+      ),
     );
-    }
   }
+}

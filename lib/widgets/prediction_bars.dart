@@ -36,7 +36,10 @@ class PredictionBars extends StatelessWidget {
                     padding: const EdgeInsets.only(right: 8),
                     child: Text(
                       item.className,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                      ),
                       textAlign: TextAlign.right,
                     ),
                   );
@@ -58,7 +61,10 @@ class PredictionBars extends StatelessWidget {
                     padding: const EdgeInsets.only(left: 8),
                     child: Text(
                       '${(item.confidence * 100).round()}%',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   );
                 }
@@ -72,10 +78,8 @@ class PredictionBars extends StatelessWidget {
           show: true,
           drawVerticalLine: false,
           horizontalInterval: 0.2,
-          getDrawingHorizontalLine: (value) => FlLine(
-            color: Colors.grey.withValues(alpha: 0.2),
-            strokeWidth: 1,
-          ),
+          getDrawingHorizontalLine: (value) =>
+              FlLine(color: Colors.grey.withValues(alpha: 0.2), strokeWidth: 1),
         ),
         borderData: FlBorderData(show: false),
         barTouchData: BarTouchData(
@@ -85,43 +89,43 @@ class PredictionBars extends StatelessWidget {
               final item = sorted[group.x];
               return BarTooltipItem(
                 '${item.className}: ${(item.confidence * 100).toStringAsFixed(1)}%',
-                const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               );
             },
           ),
         ),
-      )
+      ),
     );
   }
 
   List<BarChartGroupData> _buildBarGroups(List<PredictionItem> sorted) {
-    return List.generate(
-      sorted.length.clamp(0, maxBars),
-      (index) {
-        final item = sorted[index];
-        final color = _confidenceToColor(item.confidence);
-        return BarChartGroupData(
-          x: index,
-          barRods: [
-            BarChartRodData(
-              toY: item.confidence,
-              color: color,
-              width: 20,
-              borderRadius: const BorderRadius.only(
-                topRight: Radius.circular(8),
-                bottomRight: Radius.circular(8),
-              ),
-              backDrawRodData: BackgroundBarChartRodData(
-                show: true,
-                toY: 1.0,
-                color: Colors.grey.withValues(alpha: 0.1),
-              ),
+    return List.generate(sorted.length.clamp(0, maxBars), (index) {
+      final item = sorted[index];
+      final color = _confidenceToColor(item.confidence);
+      return BarChartGroupData(
+        x: index,
+        barRods: [
+          BarChartRodData(
+            toY: item.confidence,
+            color: color,
+            width: 20,
+            borderRadius: const BorderRadius.only(
+              topRight: Radius.circular(8),
+              bottomRight: Radius.circular(8),
             ),
-          ],
-          showingTooltipIndicators: [0],
-        );
-      },
-    );
+            backDrawRodData: BackgroundBarChartRodData(
+              show: true,
+              toY: 1.0,
+              color: Colors.grey.withValues(alpha: 0.1),
+            ),
+          ),
+        ],
+        showingTooltipIndicators: [0],
+      );
+    });
   }
 
   List<PredictionItem> _getSortedPredictions() {

@@ -4,10 +4,7 @@ import 'package:image_classifier/models/model_info.dart';
 
 /// Card displaying model metadata.
 class ModelInfoCard extends StatelessWidget {
-  const ModelInfoCard({
-    super.key,
-    required this.modelInfo,
-  });
+  const ModelInfoCard({super.key, required this.modelInfo});
 
   final ModelInfo modelInfo;
 
@@ -22,14 +19,16 @@ class ModelInfoCard extends StatelessWidget {
           children: [
             Text(
               'Model Information',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+              style: Theme.of(context).textTheme.titleLarge
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
             _InfoRow(label: 'Model', value: modelInfo.modelName),
             _InfoRow(label: 'Input Size', value: modelInfo.inputSize),
-            _InfoRow(label: 'Classes', value: '${modelInfo.classes.length} classes'),
+            _InfoRow(
+              label: 'Classes',
+              value: '${modelInfo.classes.length} classes',
+            ),
             _InfoRow(label: 'Device', value: modelInfo.device.toUpperCase()),
             _InfoRow(
               label: 'Last Trained',
@@ -67,17 +66,16 @@ class _InfoRow extends StatelessWidget {
             child: Text(
               label,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontWeight: FontWeight.w500,
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
             ),
           ),
         ],

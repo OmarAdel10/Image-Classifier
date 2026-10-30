@@ -64,7 +64,8 @@ class _DropZoneState extends State<DropZone> {
               ),
               borderRadius: BorderRadius.circular(16),
               color: _isDragOver
-                  ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3)
+                  ? Theme.of(context).colorScheme.primaryContainer
+                        .withValues(alpha: 0.3)
                   : Theme.of(context).colorScheme.surfaceContainerHighest,
             ),
             child: _previewImage != null
@@ -82,10 +83,7 @@ class _DropZoneState extends State<DropZone> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Image.file(
-            _previewImage!,
-            fit: BoxFit.cover,
-          ),
+          Image.file(_previewImage!, fit: BoxFit.cover),
           Positioned(
             top: 8,
             right: 8,
@@ -124,15 +122,16 @@ class _DropZoneState extends State<DropZone> {
               'Drag & drop an image here\nor tap to select',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
               'PNG, JPEG • Max 10 MB',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant
+                    .withValues(alpha: 0.7),
+              ),
             ),
           ],
         ),

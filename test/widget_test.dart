@@ -73,7 +73,9 @@ void main() {
       verify(mockImageService.pickImage()).called(1);
     });
 
-    testWidgets('shows selected image preview after pick', (WidgetTester tester) async {
+    testWidgets('shows selected image preview after pick', (
+      WidgetTester tester,
+    ) async {
       final pickedFile = XFile('test_image.png');
       when(mockImageService.pickImage()).thenAnswer((_) async => pickedFile);
 
@@ -102,11 +104,11 @@ void main() {
       PredictionItem(className: 'truck', confidence: 0.005),
     ];
 
-    testWidgets('renders top-5 bars with correct widths', (WidgetTester tester) async {
+    testWidgets('renders top-5 bars with correct widths', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: PredictionBars(predictions: testPredictions),
-        ),
+        MaterialApp(home: PredictionBars(predictions: testPredictions)),
       );
 
       expect(find.byType(BarChart), findsOneWidget);
@@ -118,11 +120,11 @@ void main() {
       expect(barGroups[0].barRods.first.toY, closeTo(0.9, 0.01));
     });
 
-    testWidgets('colors bars by confidence (green→yellow→red)', (WidgetTester tester) async {
+    testWidgets('colors bars by confidence (green→yellow→red)', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: PredictionBars(predictions: testPredictions),
-        ),
+        MaterialApp(home: PredictionBars(predictions: testPredictions)),
       );
 
       final barChart = tester.widget<BarChart>(find.byType(BarChart));
@@ -132,11 +134,11 @@ void main() {
       expect(barGroups[4].barRods.first.color, isNotNull);
     });
 
-    testWidgets('shows class name and percentage labels', (WidgetTester tester) async {
+    testWidgets('shows class name and percentage labels', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: PredictionBars(predictions: testPredictions),
-        ),
+        MaterialApp(home: PredictionBars(predictions: testPredictions)),
       );
 
       expect(find.text('cat'), findsOneWidget);
@@ -149,16 +151,27 @@ void main() {
     final testModelInfo = ModelInfo(
       modelName: 'cnn_scratch',
       inputSize: '32x32',
-      classes: ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck'],
+      classes: [
+        'airplane',
+        'automobile',
+        'bird',
+        'cat',
+        'deer',
+        'dog',
+        'frog',
+        'horse',
+        'ship',
+        'truck',
+      ],
       device: 'cpu',
       trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
     );
 
-    testWidgets('displays model name, input size, classes count, device', (WidgetTester tester) async {
+    testWidgets('displays model name, input size, classes count, device', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: ModelInfoCard(modelInfo: testModelInfo),
-        ),
+        MaterialApp(home: ModelInfoCard(modelInfo: testModelInfo)),
       );
 
       expect(find.text('cnn_scratch'), findsOneWidget);
@@ -169,15 +182,15 @@ void main() {
 
     testWidgets('displays trained timestamp', (WidgetTester tester) async {
       await tester.pumpWidget(
-        MaterialApp(
-          home: ModelInfoCard(modelInfo: testModelInfo),
-        ),
+        MaterialApp(home: ModelInfoCard(modelInfo: testModelInfo)),
       );
 
       expect(find.textContaining('2026-10-29'), findsOneWidget);
     });
 
-    testWidgets('handles null trainedAt gracefully', (WidgetTester tester) async {
+    testWidgets('handles null trainedAt gracefully', (
+      WidgetTester tester,
+    ) async {
       const modelInfoNoDate = ModelInfo(
         modelName: 'test',
         inputSize: '32x32',
@@ -187,9 +200,7 @@ void main() {
       );
 
       await tester.pumpWidget(
-        MaterialApp(
-          home: ModelInfoCard(modelInfo: modelInfoNoDate),
-        ),
+        MaterialApp(home: ModelInfoCard(modelInfo: modelInfoNoDate)),
       );
 
       expect(find.textContaining('Unknown'), findsOneWidget);
@@ -197,7 +208,9 @@ void main() {
   });
 
   group('LoadingOverlay widget', () {
-    testWidgets('shows semi-transparent overlay with progress indicator', (WidgetTester tester) async {
+    testWidgets('shows semi-transparent overlay with progress indicator', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: Stack(
@@ -253,12 +266,16 @@ void main() {
       when(mockProvider.state).thenReturn(const PredictionStateIdle());
     });
 
-    testWidgets('shows drop zone and no preview when idle', (WidgetTester tester) async {
+    testWidgets('shows drop zone and no preview when idle', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: MultiProvider(
             providers: [
-              ChangeNotifierProvider<PredictionProvider>.value(value: mockProvider),
+              ChangeNotifierProvider<PredictionProvider>.value(
+                value: mockProvider,
+              ),
               Provider<ImageService>.value(value: mockImageService),
             ],
             child: const HomeScreen(),
@@ -270,14 +287,18 @@ void main() {
       expect(find.byType(LoadingOverlay), findsNothing);
     });
 
-    testWidgets('shows loading overlay when predicting', (WidgetTester tester) async {
+    testWidgets('shows loading overlay when predicting', (
+      WidgetTester tester,
+    ) async {
       when(mockProvider.state).thenReturn(const PredictionStateLoading());
 
       await tester.pumpWidget(
         MaterialApp(
           home: MultiProvider(
             providers: [
-              ChangeNotifierProvider<PredictionProvider>.value(value: mockProvider),
+              ChangeNotifierProvider<PredictionProvider>.value(
+                value: mockProvider,
+              ),
               Provider<ImageService>.value(value: mockImageService),
             ],
             child: const HomeScreen(),
@@ -289,14 +310,18 @@ void main() {
       expect(find.text('Classifying...'), findsOneWidget);
     });
 
-    testWidgets('navigates to ResultScreen on successful prediction', (WidgetTester tester) async {
-      when(mockProvider.state).thenReturn(PredictionStateResult(
-        response: PredictionResponse(
-          predictions: [PredictionItem(className: 'cat', confidence: 0.9)],
-          latencyMs: 42.0,
-          model: 'cnn_scratch',
+    testWidgets('navigates to ResultScreen on successful prediction', (
+      WidgetTester tester,
+    ) async {
+      when(mockProvider.state).thenReturn(
+        PredictionStateResult(
+          response: PredictionResponse(
+            predictions: [PredictionItem(className: 'cat', confidence: 0.9)],
+            latencyMs: 42.0,
+            model: 'cnn_scratch',
+          ),
         ),
-      ));
+      );
 
       final mockImageFile = XFile('test.png');
       when(mockImageService.pickImage()).thenAnswer((_) async => mockImageFile);
@@ -306,7 +331,9 @@ void main() {
         MaterialApp(
           home: MultiProvider(
             providers: [
-              ChangeNotifierProvider<PredictionProvider>.value(value: mockProvider),
+              ChangeNotifierProvider<PredictionProvider>.value(
+                value: mockProvider,
+              ),
               Provider<ImageService>.value(value: mockImageService),
             ],
             child: const HomeScreen(),
@@ -340,24 +367,29 @@ void main() {
       trainedAt: DateTime(2026, 10, 29, 10, 0, 0),
     );
 
-    testWidgets('shows image preview, prediction bars, model info, and classify another button', (WidgetTester tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: ResultScreen(
-            imageFile: testImageFile,
-            response: testResponse,
-            modelInfo: testModelInfo,
+    testWidgets(
+      'shows image preview, prediction bars, model info, and classify another button',
+      (WidgetTester tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: ResultScreen(
+              imageFile: testImageFile,
+              response: testResponse,
+              modelInfo: testModelInfo,
+            ),
           ),
-        ),
-      );
+        );
 
-      expect(find.byType(Image), findsOneWidget);
-      expect(find.byType(PredictionBars), findsOneWidget);
-      expect(find.byType(ModelInfoCard), findsOneWidget);
-      expect(find.text('Classify Another'), findsOneWidget);
-    });
+        expect(find.byType(Image), findsOneWidget);
+        expect(find.byType(PredictionBars), findsOneWidget);
+        expect(find.byType(ModelInfoCard), findsOneWidget);
+        expect(find.text('Classify Another'), findsOneWidget);
+      },
+    );
 
-    testWidgets('Classify Another button pops back to HomeScreen', (WidgetTester tester) async {
+    testWidgets('Classify Another button pops back to HomeScreen', (
+      WidgetTester tester,
+    ) async {
       await tester.pumpWidget(
         MaterialApp(
           home: ResultScreen(
