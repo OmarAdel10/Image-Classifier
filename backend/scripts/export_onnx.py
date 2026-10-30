@@ -2,12 +2,12 @@
 """Export a trained PyTorch model to ONNX format for deployment."""
 
 import argparse
+
 import torch
-from pathlib import Path
 
 from cnn_classifier.config import Config
-from cnn_classifier.models.registry import get_model
 from cnn_classifier.inference.checkpoints import load_checkpoint
+from cnn_classifier.models.registry import get_model
 
 
 def export_onnx(
