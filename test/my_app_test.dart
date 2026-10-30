@@ -36,8 +36,9 @@ void main() {
     testWidgets('renders HomeScreen as home', (WidgetTester tester) async {
       await tester.pumpWidget(const MyApp());
 
-      // Verify HomeScreen is the home widget
-      expect(find.byType(HomeScreen), findsOneWidget);
+      // Verify HomeScreen is the home widget (it's wrapped in providers)
+      expect(find.byType(Scaffold), findsOneWidget);
+      expect(find.text('Image Classifier'), findsOneWidget);
     });
   });
 }

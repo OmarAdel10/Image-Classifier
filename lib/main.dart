@@ -1,5 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
+
+import 'package:image_classifier/providers/prediction_provider.dart';
+import 'package:image_classifier/screens/home_screen.dart';
+import 'package:image_classifier/services/api_client.dart';
+import 'package:image_classifier/services/image_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,37 +23,37 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Image Classifier',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.deepPurple,
-          brightness: Brightness.light,
+    return MultiProvider(
+      providers: [
+        Provider<ImageService>(create: (_) => ImageService()),
+        Provider<ApiClient>(
+          create: (_) => ApiClient(client: http.Client()),
+          dispose: (_, client) => client.client.close(),
         ),
-      ),
-      darkTheme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.deepPurple,
-          brightness: Brightness.dark,
+        ChangeNotifierProvider<PredictionProvider>(
+          create: (ctx) => PredictionProvider(apiClient: ctx.read<ApiClient>()),
         ),
+      ],
+      child: MaterialApp(
+        title: 'Image Classifier',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData(
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.deepPurple,
+            brightness: Brightness.light,
+          ),
+        ),
+        darkTheme: ThemeData(
+          useMaterial3: true,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: Colors.deepPurple,
+            brightness: Brightness.dark,
+          ),
+        ),
+        themeMode: ThemeMode.system,
+        home: const HomeScreen(),
       ),
-      themeMode: ThemeMode.system,
-      home: const HomeScreen(),
-    );
-  }
-}
-
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Image Classifier'), centerTitle: true),
-      body: const Center(child: Text('Drag and drop an image to classify')),
     );
   }
 }
