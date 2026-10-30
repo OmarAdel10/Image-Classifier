@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:cross_file/cross_file.dart';
@@ -46,7 +46,14 @@ class ResultScreen extends StatelessWidget {
               style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
             ),
             const SizedBox(height: 12),
-            PredictionBars(predictions: response.predictions, maxBars: 10),
+            // Bound the chart height (fl_chart needs finite height)
+            SizedBox(
+              height: 280,
+              child: PredictionBars(
+                predictions: response.predictions,
+                maxBars: 10,
+              ),
+            ),
             const SizedBox(height: 24),
 
             // Latency info
@@ -115,7 +122,45 @@ class _ImagePreview extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: AspectRatio(
         aspectRatio: 1,
-        child: Image.file(File(imageFile.path), fit: BoxFit.cover),
+        child: FutureBuilder<Uint8List>(
+          future: imageFile.readAsBytes(),
+          builder: (context, snapshot) {
+            if (snapshot.hasData) {
+              return Image.memory(
+                snapshot.data!,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) =>
+                    _buildErrorPlaceholder(context),
+              );
+            }
+            return const Center(child: CircularProgressIndicator());
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorPlaceholder(BuildContext context) {
+    return Container(
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.broken_image,
+              size: 48,
+              color: Theme.of(context).colorScheme.onErrorContainer,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Preview unavailable',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
