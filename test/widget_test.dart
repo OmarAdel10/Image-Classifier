@@ -1,8 +1,3 @@
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
-
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,11 +5,9 @@ import 'package:mockito/annotations.dart';
 import 'package:mockito/mockito.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
-import 'package:image/image.dart' as img;
 
 import 'package:image_classifier/models/prediction.dart';
 import 'package:image_classifier/models/model_info.dart';
-import 'package:image_classifier/services/api_client.dart';
 import 'package:image_classifier/providers/prediction_provider.dart';
 import 'package:image_classifier/services/image_service.dart';
 import 'package:image_classifier/screens/home_screen.dart';
@@ -26,25 +19,6 @@ import 'package:image_classifier/widgets/loading_overlay.dart';
 
 @GenerateMocks([ImageService, PredictionProvider])
 import 'widget_test.mocks.dart';
-
-Future<File> _createTempFile(Uint8List bytes) async {
-  final tempDir = Directory.systemTemp.createTempSync('widget_test_');
-  final file = File('${tempDir.path}/test_image.png');
-  await file.writeAsBytes(bytes);
-  return file;
-}
-
-Uint8List _createValidPng() {
-  final image = img.Image(width: 1, height: 1);
-  img.fill(image, color: img.ColorRgb8(128, 128, 128));
-  return Uint8List.fromList(img.encodePng(image));
-}
-
-Uint8List _createLargePng(int width, int height) {
-  final image = img.Image(width: width, height: height);
-  img.fill(image, color: img.ColorRgb8(128, 128, 128));
-  return Uint8List.fromList(img.encodePng(image));
-}
 
 void main() {
   group('DropZone widget', () {
