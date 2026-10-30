@@ -25,16 +25,39 @@ void main() {
       WidgetTester tester,
     ) async {
       await tester.pumpWidget(
-        MaterialApp(theme: ThemeData.light(), home: const HomeScreen()),
+        MaterialApp(
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: Colors.deepPurple,
+              brightness: Brightness.light,
+            ),
+          ),
+          home: const HomeScreen(),
+        ),
       );
       expect(find.byType(Scaffold), findsOneWidget);
+      // Verify text is visible (has color)
+      final textFinder = find.text('Drag and drop an image to classify');
+      expect(textFinder, findsOneWidget);
     });
 
     testWidgets('renders correctly in dark theme', (WidgetTester tester) async {
       await tester.pumpWidget(
-        MaterialApp(theme: ThemeData.dark(), home: const HomeScreen()),
+        MaterialApp(
+          theme: ThemeData(
+            useMaterial3: true,
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: Colors.deepPurple,
+              brightness: Brightness.dark,
+            ),
+          ),
+          home: const HomeScreen(),
+        ),
       );
       expect(find.byType(Scaffold), findsOneWidget);
+      final textFinder = find.text('Drag and drop an image to classify');
+      expect(textFinder, findsOneWidget);
     });
   });
 }
