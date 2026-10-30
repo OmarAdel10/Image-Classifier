@@ -36,7 +36,7 @@ void main() {
         MaterialApp(
           home: Provider<ImageService>.value(
             value: mockImageService,
-            child: const DropZone(),
+            child: DropZone(onImageSelected: (_) {}),
           ),
         ),
       );
@@ -57,7 +57,7 @@ void main() {
         MaterialApp(
           home: Provider<ImageService>.value(
             value: mockImageService,
-            child: const DropZone(),
+            child: DropZone(onImageSelected: (_) {}),
           ),
         ),
       );
