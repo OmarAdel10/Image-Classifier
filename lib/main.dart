@@ -45,13 +45,8 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Image Classifier'),
-        centerTitle: true,
-      ),
-      body: const Center(
-        child: Text('Drag and drop an image to classify'),
-      ),
+      appBar: AppBar(title: const Text('Image Classifier'), centerTitle: true),
+      body: const Center(child: Text('Drag and drop an image to classify')),
     );
   }
 }

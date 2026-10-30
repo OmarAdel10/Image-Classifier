@@ -1,5 +1,7 @@
 /// Application configuration constants.
 class Config {
+  Config._();
+
   /// Base URL for the FastAPI backend.
   static const String apiBaseUrl = 'http://localhost:8000';
 
