@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cross_file/cross_file.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_classifier/config.dart';
 
@@ -10,7 +11,7 @@ class ImageService {
 
   /// Picks an image from the gallery or file system.
   /// Returns the picked image file, or null if cancelled.
-  Future<File?> pickImage() async {
+  Future<XFile?> pickImage() async {
     // TODO: Implement using image_picker and file_picker
     throw UnimplementedError('pickImage not implemented yet');
   }
