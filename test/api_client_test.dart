@@ -129,6 +129,106 @@ void main() {
       expect(() => apiClient.getModelInfo(), throwsA(isA<ApiException>()));
     });
 
+    test('getModelInfo sanitizes control characters in error detail', () async {
+      mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({'detail': 'bad\u0000de\u0007tail\u001b\nok\t'}),
+          503,
+        );
+      });
+      apiClient = ApiClient(client: mockClient);
+
+      await expectLater(
+        apiClient.getModelInfo(),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            'baddetail\nok\t',
+          ),
+        ),
+      );
+    });
+
+    test('getModelInfo truncates overlong error detail', () async {
+      mockClient = MockClient((request) async {
+        return http.Response(jsonEncode({'detail': 'x' * 600}), 503);
+      });
+      apiClient = ApiClient(client: mockClient);
+
+      await expectLater(
+        apiClient.getModelInfo(),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            matches(RegExp(r'^x{500}\.\.\. \[truncated\]$')),
+          ),
+        ),
+      );
+    });
+
+    test('getModelInfo keeps detail at exactly the 500-char cap', () async {
+      mockClient = MockClient((request) async {
+        return http.Response(jsonEncode({'detail': 'x' * 500}), 503);
+      });
+      apiClient = ApiClient(client: mockClient);
+
+      await expectLater(
+        apiClient.getModelInfo(),
+        throwsA(
+          isA<ApiException>().having((e) => e.message, 'message', 'x' * 500),
+        ),
+      );
+    });
+
+    test(
+      'getModelInfo falls back to sanitized default on non-JSON body',
+      () async {
+        mockClient = MockClient((request) async {
+          return http.Response('oops\u0000html not json', 502);
+        });
+        apiClient = ApiClient(client: mockClient);
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>().having(
+              (e) => e.message,
+              'message',
+              'Request failed with status oopshtml not json',
+            ),
+          ),
+        );
+      },
+    );
+
+    test('getModelInfo falls back on non-String detail', () async {
+      final body = jsonEncode({
+        'detail': [
+          {
+            'loc': ['file'],
+            'msg': 'm',
+          },
+        ],
+      });
+      mockClient = MockClient((request) async {
+        return http.Response(body, 422);
+      });
+      apiClient = ApiClient(client: mockClient);
+
+      await expectLater(
+        apiClient.getModelInfo(),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            'Request failed with status $body',
+          ),
+        ),
+      );
+    });
+
     test('predict returns parsed PredictionResponse on 200', () async {
       final xFile = XFile(_createTempImageFile().path);
       mockClient = MockClient((request) async {
