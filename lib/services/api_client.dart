@@ -145,11 +145,31 @@ class ApiClient {
     try {
       final json = _parseJson(body);
       if (json is Map<String, dynamic> && json['detail'] != null) {
-        return json['detail'] as String;
+        final detail = json['detail'];
+        if (detail is String) {
+          // Sanitize: limit length and strip control characters (IC-57)
+          return _sanitizeErrorMessage(detail);
+        }
       }
     } catch (_) {
       // Fall through to default message
     }
-    return 'Request failed with status $body';
+    // Sanitize fallback message to avoid leaking sensitive data (IC-57)
+    return _sanitizeErrorMessage('Request failed with status $body');
+  }
+
+  /// Sanitizes error messages to prevent leaking sensitive data.
+  /// Limits length and strips control characters.
+  String _sanitizeErrorMessage(String message) {
+    const maxLength = 500;
+    // Strip control characters except newlines/tabs
+    final sanitized = message.replaceAll(
+      RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'),
+      '',
+    );
+    if (sanitized.length > maxLength) {
+      return '${sanitized.substring(0, maxLength)}... [truncated]';
+    }
+    return sanitized;
   }
 }
