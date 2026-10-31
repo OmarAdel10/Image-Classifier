@@ -580,7 +580,7 @@ class TestFixRoundFive:
         from cnn_classifier.inference.checkpoints import load_checkpoint
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
-        with pytest.raises(ValueError, match="not a valid torch checkpoint"):
+        with pytest.raises(ValueError, match="not a regular file"):
             load_checkpoint(tmp_path)
         path = _build_checkpoint(tmp_path, cfg)
         loaded = load_checkpoint(Path(path))
