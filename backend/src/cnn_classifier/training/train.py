@@ -9,9 +9,9 @@ like Dropout stay in train mode) so BatchNorm running statistics stay
 frozen while the head trains.
 """
 
+import json
 from collections.abc import Iterable
 from pathlib import Path
-import json
 
 import torch
 from torch import nn

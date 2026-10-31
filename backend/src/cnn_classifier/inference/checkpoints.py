@@ -6,8 +6,8 @@ explicit ``map_location`` and fails with informative errors on
 missing/corrupt files.
 """
 
-from pathlib import Path
 import json
+from pathlib import Path
 
 import torch
 

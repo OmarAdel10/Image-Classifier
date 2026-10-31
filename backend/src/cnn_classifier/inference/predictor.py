@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 
 from cnn_classifier.config import Config
-from cnn_classifier.inference.checkpoints import load_checkpoint, load_checkpoint_with_sidecar
+from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
 from cnn_classifier.models import get_model
 
 Prediction = namedtuple("Prediction", ["class_name", "confidence"])
