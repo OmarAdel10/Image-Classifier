@@ -1012,6 +1012,7 @@ class TestFixRoundThreeBehavioral:
             "best_model.pt",
             "labels.json",
             "classification_report.json",
+            "best_model_labels.json",  # sidecar labels from checkpoint
         }
 
     def test_zero_grad_called_per_batch(self):

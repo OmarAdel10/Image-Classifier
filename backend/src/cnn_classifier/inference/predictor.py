@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 
 from cnn_classifier.config import Config
-from cnn_classifier.inference.checkpoints import load_checkpoint
+from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
 from cnn_classifier.models import get_model
 
 Prediction = namedtuple("Prediction", ["class_name", "confidence"])
@@ -46,8 +46,13 @@ class Predictor:
 
         Returns:
             A Predictor in eval mode, on ``config.device``.
+
+        Note:
+            If a sidecar ``<model_stem>_labels.json`` exists next to the
+            checkpoint, its class_names take precedence over the checkpoint's
+            embedded class_names for automatic label discovery.
         """
-        checkpoint = load_checkpoint(path)
+        checkpoint = load_checkpoint_with_sidecar(path)
         ckpt_config = checkpoint["config"]
         if (
             not isinstance(ckpt_config, dict)
