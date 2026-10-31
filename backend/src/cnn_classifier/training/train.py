@@ -11,6 +11,7 @@ frozen while the head trains.
 
 from collections.abc import Iterable
 from pathlib import Path
+import json
 
 import torch
 from torch import nn
@@ -106,6 +107,12 @@ def validate(
     return {"loss": total_loss / seen if seen else 0.0, "acc": correct / seen if seen else 0.0}
 
 
+def _save_labels_sidecar(model_path: Path, class_names: list) -> None:
+    """Save class names as a sidecar labels.json next to the model checkpoint."""
+    labels_path = model_path.with_name(model_path.stem + "_labels.json")
+    atomic_write(labels_path, lambda tmp: tmp.write_text(json.dumps(list(class_names))))
+
+
 def save_checkpoint(
     path: str | Path,
     model: nn.Module,
@@ -121,6 +128,9 @@ def save_checkpoint(
     The dict layout matches the plan contract: ``model_state``,
     ``optimizer_state``, ``epoch``, ``best_val_acc``, ``config``, and
     ``class_names``.
+
+    Also writes a sidecar ``<model_stem>_labels.json`` next to the checkpoint
+    for automatic label discovery during inference.
     """
     payload = {
         "model_state": model.state_dict(),
@@ -136,4 +146,7 @@ def save_checkpoint(
         },
         "class_names": list(class_names),
     }
-    atomic_write(path, lambda tmp: torch.save(payload, tmp))
+    model_path = Path(path)
+    atomic_write(model_path, lambda tmp: torch.save(payload, tmp))
+    # Write sidecar labels.json next to the model checkpoint
+    _save_labels_sidecar(model_path, class_names)

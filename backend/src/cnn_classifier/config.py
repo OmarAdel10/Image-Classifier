@@ -213,8 +213,14 @@ class Config(BaseSettings):
 
     @property
     def class_names(self) -> list[str]:
-        """CIFAR-10 class names loaded from labels.json with hardcoded fallback."""
-        # Try to load from labels_path if it exists
+        """CIFAR-10 class names loaded from labels.json with sidecar and hardcoded fallback.
+
+        Resolution order:
+        1. Explicit labels_path (config.labels_path)
+        2. Sidecar <model_stem>_labels.json next to model_path
+        3. Hardcoded CIFAR-10 classes
+        """
+        # 1. Try explicit labels_path
         if self._labels_path_resolved.exists():
             try:
                 with open(self._labels_path_resolved, encoding="utf-8") as f:
@@ -223,7 +229,20 @@ class Config(BaseSettings):
                     return labels
             except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 pass
-        # Fallback to hardcoded CIFAR-10 classes
+
+        # 2. Try sidecar labels.json next to model_path (e.g., model.pt -> model_labels.json)
+        model_path = self._model_path_resolved
+        sidecar_path = model_path.with_name(model_path.stem + "_labels.json")
+        if sidecar_path.exists():
+            try:
+                with open(sidecar_path, encoding="utf-8") as f:
+                    labels = json.load(f)
+                if isinstance(labels, list) and len(labels) == 10:
+                    return labels
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+                pass
+
+        # 3. Fallback to hardcoded CIFAR-10 classes
         return [
             "airplane",
             "automobile",
