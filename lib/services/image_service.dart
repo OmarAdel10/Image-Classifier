@@ -1,19 +1,56 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:cross_file/cross_file.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_classifier/config.dart';
+import 'package:image_picker/image_picker.dart';
+
+/// Type alias for the image picker function to enable testing.
+typedef PickFile = Future<XFile?> Function();
 
 /// Service for picking and validating/compressing images.
 class ImageService {
-  ImageService();
+  /// Creates an [ImageService] with an optional [picker] for testing.
+  ///
+  /// If [picker] is not provided, uses the platform-appropriate default:
+  /// - Desktop (Linux/Windows/macOS): [FilePicker.platform.pickFiles]
+  /// - Mobile (Android/iOS): [ImagePicker.pickImage]
+  ImageService({PickFile? picker}) : _picker = picker ?? _defaultPicker;
+
+  final PickFile _picker;
 
   /// Picks an image from the gallery or file system.
   /// Returns the picked image file, or null if cancelled.
   Future<XFile?> pickImage() async {
-    // TODO: Implement using image_picker and file_picker
-    throw UnimplementedError('pickImage not implemented yet');
+    return _picker();
+  }
+
+  /// Default platform-aware image picker.
+  static Future<XFile?> _defaultPicker() async {
+    // Desktop platforms use file_picker
+    if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+      if (result != null && result.files.isNotEmpty) {
+        final path = result.files.single.path;
+        if (path != null) {
+          return XFile(path);
+        }
+      }
+      return null;
+    }
+
+    // Mobile platforms use image_picker
+    if (Platform.isAndroid || Platform.isIOS) {
+      final picker = ImagePicker();
+      return picker.pickImage(source: ImageSource.gallery);
+    }
+
+    // Fallback for other platforms (web, etc.)
+    return null;
   }
 
   /// Validates and compresses an image file for upload.

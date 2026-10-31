@@ -4,16 +4,19 @@
 
 // ignore_for_file: no_leading_underscores_for_library_prefixes
 
-import 'dart:async' as _i5;
+import 'dart:async' as _i8;
 import 'dart:io' as _i2;
-import 'dart:ui' as _i9;
+import 'dart:ui' as _i12;
 
-import 'package:cross_file/cross_file.dart' as _i6;
-import 'package:image_classifier/providers/prediction_provider.dart' as _i7;
-import 'package:image_classifier/services/api_client.dart' as _i3;
-import 'package:image_classifier/services/image_service.dart' as _i4;
+import 'package:cross_file/cross_file.dart' as _i9;
+import 'package:http/http.dart' as _i3;
+import 'package:image_classifier/models/model_info.dart' as _i4;
+import 'package:image_classifier/models/prediction.dart' as _i5;
+import 'package:image_classifier/providers/prediction_provider.dart' as _i10;
+import 'package:image_classifier/services/api_client.dart' as _i6;
+import 'package:image_classifier/services/image_service.dart' as _i7;
 import 'package:mockito/mockito.dart' as _i1;
-import 'package:mockito/src/dummies.dart' as _i8;
+import 'package:mockito/src/dummies.dart' as _i11;
 
 // ignore_for_file: type=lint
 // ignore_for_file: avoid_redundant_argument_values
@@ -36,58 +39,134 @@ class _FakeFile_0 extends _i1.SmartFake implements _i2.File {
     : super(parent, parentInvocation);
 }
 
-class _FakeApiClient_1 extends _i1.SmartFake implements _i3.ApiClient {
-  _FakeApiClient_1(Object parent, Invocation parentInvocation)
+class _FakeClient_1 extends _i1.SmartFake implements _i3.Client {
+  _FakeClient_1(Object parent, Invocation parentInvocation)
+    : super(parent, parentInvocation);
+}
+
+class _FakeModelInfo_2 extends _i1.SmartFake implements _i4.ModelInfo {
+  _FakeModelInfo_2(Object parent, Invocation parentInvocation)
+    : super(parent, parentInvocation);
+}
+
+class _FakePredictionResponse_3 extends _i1.SmartFake
+    implements _i5.PredictionResponse {
+  _FakePredictionResponse_3(Object parent, Invocation parentInvocation)
+    : super(parent, parentInvocation);
+}
+
+class _FakeApiClient_4 extends _i1.SmartFake implements _i6.ApiClient {
+  _FakeApiClient_4(Object parent, Invocation parentInvocation)
     : super(parent, parentInvocation);
 }
 
 /// A class which mocks [ImageService].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockImageService extends _i1.Mock implements _i4.ImageService {
+class MockImageService extends _i1.Mock implements _i7.ImageService {
   MockImageService() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  _i5.Future<_i6.XFile?> pickImage() => (super.noSuchMethod(
+  _i8.Future<_i9.XFile?> pickImage() => (super.noSuchMethod(
     Invocation.method(#pickImage, []),
-    returnValue: _i5.Future<_i6.XFile?>.value(),
-  ) as _i5.Future<_i6.XFile?>);
+    returnValue: _i8.Future<_i9.XFile?>.value(),
+  ) as _i8.Future<_i9.XFile?>);
 
   @override
-  _i5.Future<_i2.File> validateAndCompress(_i2.File? file) =>
+  _i8.Future<_i2.File> validateAndCompress(_i2.File? file) =>
       (super.noSuchMethod(
         Invocation.method(#validateAndCompress, [file]),
-        returnValue: _i5.Future<_i2.File>.value(
+        returnValue: _i8.Future<_i2.File>.value(
           _FakeFile_0(this, Invocation.method(#validateAndCompress, [file])),
         ),
-      ) as _i5.Future<_i2.File>);
+      ) as _i8.Future<_i2.File>);
+}
+
+/// A class which mocks [ApiClient].
+///
+/// See the documentation for Mockito's code generation for more information.
+class MockApiClient extends _i1.Mock implements _i6.ApiClient {
+  MockApiClient() {
+    _i1.throwOnMissingStub(this);
+  }
+
+  @override
+  _i3.Client get client => (super.noSuchMethod(
+    Invocation.getter(#client),
+    returnValue: _FakeClient_1(this, Invocation.getter(#client)),
+  ) as _i3.Client);
+
+  @override
+  _i8.Future<bool> healthCheck() => (super.noSuchMethod(
+    Invocation.method(#healthCheck, []),
+    returnValue: _i8.Future<bool>.value(false),
+  ) as _i8.Future<bool>);
+
+  @override
+  _i8.Future<_i4.ModelInfo> getModelInfo() => (super.noSuchMethod(
+    Invocation.method(#getModelInfo, []),
+    returnValue: _i8.Future<_i4.ModelInfo>.value(
+      _FakeModelInfo_2(this, Invocation.method(#getModelInfo, [])),
+    ),
+  ) as _i8.Future<_i4.ModelInfo>);
+
+  @override
+  _i8.Future<_i5.PredictionResponse> predict(_i2.File? imageFile) =>
+      (super.noSuchMethod(
+        Invocation.method(#predict, [imageFile]),
+        returnValue: _i8.Future<_i5.PredictionResponse>.value(
+          _FakePredictionResponse_3(
+            this,
+            Invocation.method(#predict, [imageFile]),
+          ),
+        ),
+      ) as _i8.Future<_i5.PredictionResponse>);
+
+  @override
+  _i8.Future<_i5.PredictionResponse> predictXFile(_i9.XFile? xFile) =>
+      (super.noSuchMethod(
+        Invocation.method(#predictXFile, [xFile]),
+        returnValue: _i8.Future<_i5.PredictionResponse>.value(
+          _FakePredictionResponse_3(
+            this,
+            Invocation.method(#predictXFile, [xFile]),
+          ),
+        ),
+      ) as _i8.Future<_i5.PredictionResponse>);
+
+  @override
+  _i8.Future<void> dispose() => (super.noSuchMethod(
+    Invocation.method(#dispose, []),
+    returnValue: _i8.Future<void>.value(),
+    returnValueForMissingStub: _i8.Future<void>.value(),
+  ) as _i8.Future<void>);
 }
 
 /// A class which mocks [PredictionProvider].
 ///
 /// See the documentation for Mockito's code generation for more information.
 class MockPredictionProvider extends _i1.Mock
-    implements _i7.PredictionProvider {
+    implements _i10.PredictionProvider {
   MockPredictionProvider() {
     _i1.throwOnMissingStub(this);
   }
 
   @override
-  _i3.ApiClient get apiClient => (super.noSuchMethod(
+  _i6.ApiClient get apiClient => (super.noSuchMethod(
     Invocation.getter(#apiClient),
-    returnValue: _FakeApiClient_1(this, Invocation.getter(#apiClient)),
-  ) as _i3.ApiClient);
+    returnValue: _FakeApiClient_4(this, Invocation.getter(#apiClient)),
+  ) as _i6.ApiClient);
 
   @override
-  _i7.PredictionState get state => (super.noSuchMethod(
+  _i10.PredictionState get state => (super.noSuchMethod(
     Invocation.getter(#state),
-    returnValue: _i8.dummyValue<_i7.PredictionState>(
+    returnValue: _i11.dummyValue<_i10.PredictionState>(
       this,
       Invocation.getter(#state),
     ),
-  ) as _i7.PredictionState);
+  ) as _i10.PredictionState);
 
   @override
   bool get hasListeners =>
@@ -95,11 +174,11 @@ class MockPredictionProvider extends _i1.Mock
           as bool);
 
   @override
-  _i5.Future<void> predict(_i6.XFile? file) => (super.noSuchMethod(
+  _i8.Future<void> predict(_i9.XFile? file) => (super.noSuchMethod(
     Invocation.method(#predict, [file]),
-    returnValue: _i5.Future<void>.value(),
-    returnValueForMissingStub: _i5.Future<void>.value(),
-  ) as _i5.Future<void>);
+    returnValue: _i8.Future<void>.value(),
+    returnValueForMissingStub: _i8.Future<void>.value(),
+  ) as _i8.Future<void>);
 
   @override
   void clear() => super.noSuchMethod(
@@ -108,13 +187,13 @@ class MockPredictionProvider extends _i1.Mock
   );
 
   @override
-  void addListener(_i9.VoidCallback? listener) => super.noSuchMethod(
+  void addListener(_i12.VoidCallback? listener) => super.noSuchMethod(
     Invocation.method(#addListener, [listener]),
     returnValueForMissingStub: null,
   );
 
   @override
-  void removeListener(_i9.VoidCallback? listener) => super.noSuchMethod(
+  void removeListener(_i12.VoidCallback? listener) => super.noSuchMethod(
     Invocation.method(#removeListener, [listener]),
     returnValueForMissingStub: null,
   );

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -6,17 +8,33 @@ import 'package:image_classifier/models/model_info.dart';
 import 'package:image_classifier/models/prediction.dart';
 import 'package:image_classifier/providers/prediction_provider.dart';
 import 'package:image_classifier/screens/result_screen.dart';
+import 'package:image_classifier/services/api_client.dart';
+import 'package:image_classifier/services/image_service.dart';
 import 'package:image_classifier/widgets/drop_zone.dart';
 import 'package:image_classifier/widgets/loading_overlay.dart';
 
 /// Home screen with drop zone for image classification.
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  XFile? _selectedImage;
+  File? _compressedImage;
+  ModelInfo? _modelInfo;
+  bool _navigated = false;
+  bool _isFetchingModelInfo = false;
 
   @override
   Widget build(BuildContext context) {
     return Consumer<PredictionProvider>(
       builder: (context, provider, _) {
+        // Handle state transitions
+        _handleProviderState(provider);
+
         return Scaffold(
           appBar: AppBar(
             title: const Text('Image Classifier'),
@@ -25,7 +43,7 @@ class HomeScreen extends StatelessWidget {
               if (provider.state is PredictionStateResult)
                 IconButton(
                   icon: const Icon(Icons.clear),
-                  onPressed: () => provider.clear(),
+                  onPressed: _clearPrediction,
                   tooltip: 'Clear prediction',
                 ),
             ],
@@ -37,12 +55,26 @@ class HomeScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const DropZone(),
+                    DropZone(
+                      key: const Key('drop_zone'),
+                      onImageSelected: _onImageSelected,
+                      onClassify: _onClassify,
+                      isBusy: provider.state is PredictionStateLoading,
+                    ),
                     const SizedBox(height: 24),
                     if (provider.state is PredictionStateResult)
                       _ResultPreview(
                         response:
                             (provider.state as PredictionStateResult).response,
+                        onClear: _clearPrediction,
+                        onViewDetails: _onViewDetails,
+                      ),
+                    if (_isFetchingModelInfo)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: CircularProgressIndicator(),
+                        ),
                       ),
                   ],
                 ),
@@ -53,6 +85,138 @@ class HomeScreen extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+  void _handleProviderState(PredictionProvider provider) {
+    final state = provider.state;
+
+    if (state is PredictionStateResult && !_navigated) {
+      _navigated = true;
+      // Use post-frame callback to navigate after build completes
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _pushResultScreen(state.response);
+      });
+    } else if (state is PredictionStateError) {
+      _showErrorSnackBar(state.message);
+    } else if (state is PredictionStateIdle) {
+      _navigated = false;
+    }
+  }
+
+  Future<void> _onImageSelected(XFile imageFile) async {
+    setState(() {
+      _selectedImage = imageFile;
+      _compressedImage = null;
+      _modelInfo = null;
+      _isFetchingModelInfo = true;
+    });
+
+    // Validate and compress the image
+    try {
+      final imageService = context.read<ImageService>();
+      final compressed = await imageService.validateAndCompress(
+        File(imageFile.path),
+      );
+      if (!mounted) return;
+      setState(() {
+        _compressedImage = compressed;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      _showErrorSnackBar('Invalid image: $e');
+      setState(() {
+        _selectedImage = null;
+        _isFetchingModelInfo = false;
+      });
+      return;
+    }
+
+    // Fetch model info
+    try {
+      final apiClient = context.read<ApiClient>();
+      final modelInfo = await apiClient.getModelInfo();
+      if (!mounted) return;
+      setState(() {
+        _modelInfo = modelInfo;
+        _isFetchingModelInfo = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _modelInfo = const ModelInfo(
+          modelName: 'Unknown',
+          inputSize: 'Unknown',
+          classes: [],
+          device: 'Unknown',
+          trainedAt: null,
+        );
+        _isFetchingModelInfo = false;
+      });
+    }
+  }
+
+  void _onClassify() {
+    if (_compressedImage == null) return;
+
+    final provider = context.read<PredictionProvider>();
+    // Convert File to XFile for the provider
+    final xFile = XFile(_compressedImage!.path);
+    provider.predict(xFile);
+  }
+
+  void _clearPrediction() {
+    setState(() {
+      _selectedImage = null;
+      _compressedImage = null;
+      _navigated = false;
+    });
+    context.read<PredictionProvider>().clear();
+  }
+
+  void _onViewDetails(PredictionResponse response) {
+    if (_selectedImage == null || _modelInfo == null) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ResultScreen(
+          imageFile: _selectedImage!,
+          response: response,
+          modelInfo: _modelInfo!,
+        ),
+      ),
+    );
+  }
+
+  void _pushResultScreen(PredictionResponse response) {
+    if (_selectedImage == null || _modelInfo == null) return;
+
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ResultScreen(
+          imageFile: _selectedImage!,
+          response: response,
+          modelInfo: _modelInfo!,
+        ),
+      ),
+    );
+  }
+
+  void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Theme.of(context).colorScheme.error,
+        action: SnackBarAction(
+          label: 'Retry',
+          textColor: Theme.of(context).colorScheme.onError,
+          onPressed: () {
+            if (_selectedImage != null) {
+              _onClassify();
+            }
+          },
+        ),
+      ),
     );
   }
 }
@@ -117,9 +281,15 @@ class _PredictionTile extends StatelessWidget {
 }
 
 class _ResultPreview extends StatelessWidget {
-  const _ResultPreview({required this.response});
+  const _ResultPreview({
+    required this.response,
+    required this.onClear,
+    required this.onViewDetails,
+  });
 
   final PredictionResponse response;
+  final VoidCallback onClear;
+  final void Function(PredictionResponse) onViewDetails;
 
   @override
   Widget build(BuildContext context) {
@@ -161,12 +331,6 @@ class _ResultPreview extends StatelessWidget {
                     ],
                   ),
                 ),
-                const Spacer(),
-                FilledButton.icon(
-                  onPressed: () => context.read<PredictionProvider>().clear(),
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('Classify Another'),
-                ),
               ],
             ),
             const SizedBox(height: 16),
@@ -179,26 +343,23 @@ class _ResultPreview extends StatelessWidget {
                 .take(3)
                 .map((pred) => _PredictionTile(prediction: pred)),
             const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => ResultScreen(
-                      imageFile: XFile(''), // placeholder
-                      response: response,
-                      modelInfo: const ModelInfo(
-                        modelName: '',
-                        inputSize: '',
-                        classes: [],
-                        device: '',
-                        trainedAt: null,
-                      ),
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.analytics),
-              label: const Text('View Details'),
+            // Use Wrap to avoid Row overflow on narrow widths
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => onClear(),
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Classify Another'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: () => onViewDetails(response),
+                  icon: const Icon(Icons.analytics),
+                  label: const Text('View Details'),
+                ),
+              ],
             ),
           ],
         ),

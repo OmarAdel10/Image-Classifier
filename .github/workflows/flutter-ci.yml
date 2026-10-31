@@ -50,4 +50,4 @@ jobs:
         run: flutter analyze --fatal-infos
 
       - name: Run tests
-        run: flutter test || echo "Tests completed with failures (UI layout issues in CI env)"
+        run: flutter test
