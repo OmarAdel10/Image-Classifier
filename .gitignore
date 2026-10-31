@@ -51,7 +51,6 @@ lectures/*
 # Backend dataset downloads (CIFAR-10 cache, ~340MB)
 backend/data/
 
-
 # Python test/build artifacts
 .coverage
 *.egg-info/
@@ -62,4 +61,6 @@ backend/.env
 
 # Local env files and session working docs
 /.env
+.env.local
+.env.*.local
 docs/

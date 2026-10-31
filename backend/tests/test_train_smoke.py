@@ -222,6 +222,10 @@ class TestCheckpoint:
             "seed": cfg.seed,
             "device": "cpu",
             "batch_size": 2,
+            "normalization": {
+                "mean": (0.4914, 0.4822, 0.4465),
+                "std": (0.2470, 0.2435, 0.2616),
+            },
         }
         head_weight = model.head[-1].weight.detach()
         restored = checkpoint["model_state"]["head.4.weight"]
@@ -661,6 +665,10 @@ class TestFixRoundTwoSecurity:
             "seed": cfg.seed,
             "device": "cpu",
             "batch_size": 2,
+            "normalization": {
+                "mean": (0.4914, 0.4822, 0.4465),
+                "std": (0.2470, 0.2435, 0.2616),
+            },
         }
 
     def test_report_uses_best_checkpoint(self, tmp_path, monkeypatch, caplog):

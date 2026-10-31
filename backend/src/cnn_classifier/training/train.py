@@ -17,6 +17,7 @@ import torch
 from torch import nn
 
 from cnn_classifier.config import Config
+from cnn_classifier.data.dataset import CIFAR10_MEAN, CIFAR10_STD
 from cnn_classifier.training.atomic import atomic_write
 
 # Gradient clipping bound applied after loss.backward() (spec: max_norm=1.0).
@@ -143,6 +144,12 @@ def save_checkpoint(
             "seed": config.seed,
             "device": config.device,
             "batch_size": config.batch_size,
+            # Normalization provenance (IC-30): record mean/std used during training
+            # so inference can verify it matches the training normalization.
+            "normalization": {
+                "mean": CIFAR10_MEAN,
+                "std": CIFAR10_STD,
+            },
         },
         "class_names": list(class_names),
     }

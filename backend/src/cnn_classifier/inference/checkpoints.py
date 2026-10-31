@@ -7,6 +7,7 @@ missing/corrupt files.
 """
 
 import json
+import stat
 from pathlib import Path
 
 import torch
@@ -47,6 +48,16 @@ def load_checkpoint(path: str | Path) -> dict:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"checkpoint not found: {path}")
+    
+    # Resolve symlinks to prevent symlink attacks (IC-3)
+    # Use stat to verify it's a regular file, not a symlink
+    try:
+        stat_result = path.stat()
+        if not stat.S_ISREG(stat_result.st_mode):
+            raise ValueError(f"not a regular file: {path}")
+    except OSError as exc:
+        raise FileNotFoundError(f"checkpoint not found: {path}") from exc
+    
     try:
         checkpoint = torch.load(path, weights_only=True, map_location="cpu")
     except Exception as exc:
