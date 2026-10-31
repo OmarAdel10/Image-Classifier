@@ -12,8 +12,30 @@ concurrency:
 
 permissions:
   contents: read
+  security-events: write  # for SARIF upload
 
 jobs:
+  secrets-scan:
+    name: Secrets Scan (gitleaks)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0  # full history for gitleaks
+          persist-credentials: false
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@master
+        with:
+          config-path: .gitleaks.toml
+          verbose: true
+          fail: true
+
   flutter:
     name: Flutter CI
     runs-on: ubuntu-24.04
