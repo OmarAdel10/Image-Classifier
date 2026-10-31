@@ -101,7 +101,15 @@ jobs:
              || ! md5sum -c <<< 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' \
              || ! sha256sum -c <<< '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz'; then
             rm -f cifar-10-python.tar.gz
-            wget --tries=3 --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+            # Each attempt is capped at 10 min of wall clock: wget --timeout
+            # only bounds per-read stalls, so a throttled transfer can
+            # otherwise hang for the whole job (observed 37m+). -c resumes
+            # the partial archive across attempts instead of restarting from
+            # byte 0; the md5/sha256 checks below fail the step if the
+            # archive is still incomplete after 3 attempts.
+            for attempt in 1 2 3; do
+              timeout 600 wget -c -q --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz && break
+            done
           fi
           echo 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' | md5sum -c -
           echo '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz' | sha256sum -c -
