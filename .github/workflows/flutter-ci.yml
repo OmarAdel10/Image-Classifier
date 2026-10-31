@@ -28,6 +28,7 @@ jobs:
         with:
           fetch-depth: 0  # full history for gitleaks
           persist-credentials: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@master
@@ -35,6 +36,8 @@ jobs:
           config-path: .gitleaks.toml
           verbose: true
           fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   flutter:
     name: Flutter CI
