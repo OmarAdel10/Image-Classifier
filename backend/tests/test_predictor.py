@@ -803,3 +803,71 @@ class TestFixRoundSeven:
         assert pred.input_size == (32, 32)
         results = pred.predict(torch.randn(1, 3, 32, 32))
         assert len(results) == 10
+
+
+class TestNormalizationProvenance:
+    """IC-65: from_checkpoint verifies recorded normalization provenance."""
+
+    def _resave_with_normalization(self, path, normalization):
+        """Load a checkpoint, replace its normalization payload, re-save."""
+        import torch
+
+        ckpt = torch.load(path, weights_only=True)
+        ckpt["config"]["normalization"] = normalization
+        torch.save(ckpt, path)
+        return path
+
+    def test_mismatched_normalization_raises(self, tmp_path):
+        """A checkpoint trained with different stats is refused (wrong inputs)."""
+        import pytest
+
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        self._resave_with_normalization(
+            path,
+            {"mean": [0.5, 0.5, 0.5], "std": [0.2, 0.2, 0.2]},
+        )
+        with pytest.raises(ValueError, match="does not match inference normalization"):
+            Predictor.from_checkpoint(str(path), cfg)
+
+    def test_matching_normalization_loads(self, tmp_path):
+        """The recorded CIFAR-10 stats match -> loads without error."""
+        from cnn_classifier.data.dataset import CIFAR10_MEAN, CIFAR10_STD
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        self._resave_with_normalization(
+            path,
+            {"mean": list(CIFAR10_MEAN), "std": list(CIFAR10_STD)},
+        )
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        assert len(pred.class_names) == 10
+
+    def test_legacy_checkpoint_without_normalization_loads(self, tmp_path):
+        """Pre-IC-30 checkpoints (no normalization key) stay loadable."""
+        import torch
+
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        ckpt = torch.load(path, weights_only=True)
+        del ckpt["config"]["normalization"]
+        torch.save(ckpt, path)
+        pred = Predictor.from_checkpoint(str(path), cfg)
+        assert len(pred.class_names) == 10
+
+    def test_malformed_normalization_raises(self, tmp_path):
+        """A non-3-element normalization payload is rejected, not silently used."""
+        import pytest
+
+        from cnn_classifier.inference.predictor import Predictor
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        path = _build_checkpoint(tmp_path, cfg)
+        self._resave_with_normalization(path, {"mean": [0.5], "std": [0.2]})
+        with pytest.raises(ValueError, match="malformed checkpoint normalization"):
+            Predictor.from_checkpoint(str(path), cfg)

@@ -12,7 +12,9 @@ class ModelInfo {
     DateTime? trainedAt;
     final trainedAtJson = json['trained_at'];
     if (trainedAtJson != null) {
-      trainedAt = DateTime.tryParse(trainedAtJson as String)?.toLocal();
+      // Keep the parsed instant in UTC (IC-58): converting to local time
+      // made serialized round-trips timezone-dependent.
+      trainedAt = DateTime.tryParse(trainedAtJson as String)?.toUtc();
     }
 
     return ModelInfo(

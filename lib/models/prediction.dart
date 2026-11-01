@@ -4,6 +4,13 @@ class PredictionItem {
 
   factory PredictionItem.fromJson(Map<String, dynamic> json) {
     final confidence = (json['confidence'] as num).toDouble();
+    // Debug-mode guard (IC-59): the server must never send an
+    // out-of-range confidence; surface the bug during development.
+    // Release builds skip the assert and keep the defensive clamp.
+    assert(
+      confidence >= 0.0 && confidence <= 1.0,
+      'confidence out of [0, 1] range from server: $confidence',
+    );
     return PredictionItem(
       className: json['class_name'] as String,
       confidence: confidence.clamp(0.0, 1.0),

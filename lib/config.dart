@@ -20,4 +20,15 @@ class Config {
 
   /// 1 MiB in bytes.
   static const int _kMebibyte = 1024 * 1024;
+
+  /// Returns true when [url] is a well-formed http(s) base URL
+  /// (scheme http/https and a non-empty host). Guards against URL
+  /// injection via a malformed `--dart-define=API_BASE_URL=...`
+  /// (IC-60).
+  static bool isValidApiBaseUrl(String url) {
+    final uri = Uri.tryParse(url);
+    return uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
+  }
 }
