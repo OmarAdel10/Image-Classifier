@@ -383,6 +383,7 @@ void main() {
       expect(info.classes, ['cat', 'dog']);
       expect(info.device, 'cpu');
       expect(info.trainedAt, isNotNull);
+      expect(info.trainedAt!.isUtc, isTrue);
     });
 
     test('fromJson handles null trained_at', () {
@@ -396,6 +397,24 @@ void main() {
       final info = ModelInfo.fromJson(json);
 
       expect(info.trainedAt, isNull);
+    });
+
+    test('fromJson preserves UTC instant on roundtrip (IC-58)', () {
+      final json = {
+        'model': 'cnn_scratch',
+        'input_size': '32x32',
+        'classes': ['cat', 'dog'],
+        'device': 'cpu',
+        'trained_at': '2026-10-29T10:00:00.000Z',
+      };
+      final info = ModelInfo.fromJson(json);
+      final roundtripped = ModelInfo.fromJson(info.toJson());
+
+      // The serialized instant must be timezone-independent: local
+      // conversion shifted it by the machine offset before IC-58.
+      expect(info.toJson()['trained_at'], '2026-10-29T10:00:00.000Z');
+      expect(roundtripped.trainedAt, info.trainedAt);
+      expect(roundtripped.trainedAt!.isUtc, isTrue);
     });
 
     test('toJson returns correct map', () {
@@ -483,17 +502,26 @@ void main() {
       );
     });
 
-    test('clamps confidence to [0, 1] range', () {
-      final itemHigh = PredictionItem.fromJson({
+    test('fromJson keeps in-range confidence unchanged', () {
+      final item = PredictionItem.fromJson({
         'class_name': 'cat',
-        'confidence': 1.5,
+        'confidence': 0.42,
       });
-      expect(itemHigh.confidence, 1.0);
-      final itemLow = PredictionItem.fromJson({
-        'class_name': 'cat',
-        'confidence': -0.5,
-      });
-      expect(itemLow.confidence, 0.0);
+      expect(item.confidence, 0.42);
+    });
+
+    test('asserts out-of-range confidence in debug mode (IC-59)', () {
+      // Debug builds (including flutter test) surface server bugs loudly
+      // via the assert; release builds keep the defensive clamp.
+      expect(
+        () => PredictionItem.fromJson({'class_name': 'cat', 'confidence': 1.5}),
+        throwsA(isA<AssertionError>()),
+      );
+      expect(
+        () =>
+            PredictionItem.fromJson({'class_name': 'cat', 'confidence': -0.5}),
+        throwsA(isA<AssertionError>()),
+      );
     });
   });
 

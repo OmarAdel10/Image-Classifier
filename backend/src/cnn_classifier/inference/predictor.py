@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 
 from cnn_classifier.config import Config
+from cnn_classifier.data.dataset import CIFAR10_MEAN, CIFAR10_STD
 from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
 from cnn_classifier.models import get_model
 
@@ -66,6 +67,31 @@ class Predictor:
             )
         ):
             raise ValueError(f"malformed checkpoint config: {ckpt_config!r}")
+        # Normalization provenance check (IC-65 / IC-30): when the
+        # checkpoint records the training normalization, verify it matches
+        # the statistics inference actually applies (preprocess.py hardcodes
+        # CIFAR10_MEAN/STD). A mismatch means the model would be served with
+        # inputs scaled differently than during training -> wrong
+        # predictions, so fail loudly. Checkpoints recorded before IC-30
+        # have no "normalization" key and skip this check (backward compat).
+        normalization = ckpt_config.get("normalization")
+        if normalization is not None:
+            if (
+                not isinstance(normalization, dict)
+                or not isinstance(normalization.get("mean"), (list, tuple))
+                or not isinstance(normalization.get("std"), (list, tuple))
+                or len(normalization["mean"]) != 3
+                or len(normalization["std"]) != 3
+            ):
+                raise ValueError(f"malformed checkpoint normalization: {normalization!r}")
+            recorded_mean = tuple(float(v) for v in normalization["mean"])
+            recorded_std = tuple(float(v) for v in normalization["std"])
+            if recorded_mean != tuple(CIFAR10_MEAN) or recorded_std != tuple(CIFAR10_STD):
+                raise ValueError(
+                    f"checkpoint normalization {recorded_mean}/{recorded_std} does not "
+                    f"match inference normalization "
+                    f"{tuple(CIFAR10_MEAN)}/{tuple(CIFAR10_STD)}"
+                )
         model_config = Config(
             input_size=tuple(ckpt_config["input_size"]),
             device=config.device,
