@@ -838,6 +838,7 @@ class TestNormalizationProvenance:
     def _resave_with_normalization(self, path, normalization):
         """Load a checkpoint, replace its normalization payload, re-save with updated SHA256."""
         import hashlib
+
         import torch
 
         ckpt = torch.load(path, weights_only=True)
@@ -883,8 +884,8 @@ class TestNormalizationProvenance:
 
     def test_legacy_checkpoint_without_normalization_loads(self, tmp_path):
         """Pre-IC-30 checkpoints (no normalization key, no SHA256) stay loadable."""
+
         import torch
-        import hashlib
 
         from cnn_classifier.inference.predictor import Predictor
 
