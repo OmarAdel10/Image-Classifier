@@ -444,6 +444,8 @@ class TestFixRoundFour:
 
     def test_nan_weights_rejected(self, tmp_path):
         """Checkpoints whose weights produce non-finite outputs are rejected."""
+        import hashlib
+
         from cnn_classifier.inference.predictor import Predictor
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
@@ -451,6 +453,13 @@ class TestFixRoundFour:
         ckpt = torch.load(path, weights_only=True)
         ckpt["model_state"]["head.4.weight"].fill_(float("nan"))
         torch.save(ckpt, path)
+        # Update SHA256 sidecar to match tampered checkpoint (IC-32)
+        sha256_path = path.with_suffix(path.suffix + ".sha256")
+        hasher = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hasher.update(chunk)
+        sha256_path.write_text(hasher.hexdigest())
         with pytest.raises(ValueError, match="non-finite"):
             Predictor.from_checkpoint(str(path), cfg)
 
@@ -563,6 +572,8 @@ class TestFixRoundFive:
 
     def test_model_state_non_tensor_values_rejected(self, tmp_path):
         """model_state dicts with non-tensor values hit the TypeError arm."""
+        import hashlib
+
         from cnn_classifier.inference.predictor import Predictor
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
@@ -570,6 +581,13 @@ class TestFixRoundFive:
         ckpt = torch.load(path, weights_only=True)
         ckpt["model_state"] = {key: "corrupt" for key in ckpt["model_state"]}
         torch.save(ckpt, path)
+        # Update SHA256 sidecar to match tampered checkpoint (IC-32)
+        sha256_path = path.with_suffix(path.suffix + ".sha256")
+        hasher = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hasher.update(chunk)
+        sha256_path.write_text(hasher.hexdigest())
         with pytest.raises(ValueError, match="does not match recorded architecture"):
             Predictor.from_checkpoint(str(path), cfg)
 
@@ -631,6 +649,8 @@ class TestFixRoundSix:
 
     def test_huge_finite_weights_rejected(self, tmp_path):
         """Finite-but-huge weights overflow the ones-probe at load time."""
+        import hashlib
+
         from cnn_classifier.inference.predictor import Predictor
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
@@ -640,6 +660,13 @@ class TestFixRoundSix:
             key: torch.full_like(value, 3e38) for key, value in ckpt["model_state"].items()
         }
         torch.save(ckpt, path)
+        # Update SHA256 sidecar to match tampered checkpoint (IC-32)
+        sha256_path = path.with_suffix(path.suffix + ".sha256")
+        hasher = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hasher.update(chunk)
+        sha256_path.write_text(hasher.hexdigest())
         with pytest.raises(ValueError, match="non-finite"):
             Predictor.from_checkpoint(str(path), cfg)
 
@@ -809,12 +836,20 @@ class TestNormalizationProvenance:
     """IC-65: from_checkpoint verifies recorded normalization provenance."""
 
     def _resave_with_normalization(self, path, normalization):
-        """Load a checkpoint, replace its normalization payload, re-save."""
+        """Load a checkpoint, replace its normalization payload, re-save with updated SHA256."""
+        import hashlib
         import torch
 
         ckpt = torch.load(path, weights_only=True)
         ckpt["config"]["normalization"] = normalization
         torch.save(ckpt, path)
+        # Update SHA256 sidecar (IC-32)
+        sha256_path = path.with_suffix(path.suffix + ".sha256")
+        hasher = hashlib.sha256()
+        with path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hasher.update(chunk)
+        sha256_path.write_text(hasher.hexdigest())
         return path
 
     def test_mismatched_normalization_raises(self, tmp_path):
@@ -847,8 +882,9 @@ class TestNormalizationProvenance:
         assert len(pred.class_names) == 10
 
     def test_legacy_checkpoint_without_normalization_loads(self, tmp_path):
-        """Pre-IC-30 checkpoints (no normalization key) stay loadable."""
+        """Pre-IC-30 checkpoints (no normalization key, no SHA256) stay loadable."""
         import torch
+        import hashlib
 
         from cnn_classifier.inference.predictor import Predictor
 
@@ -857,6 +893,10 @@ class TestNormalizationProvenance:
         ckpt = torch.load(path, weights_only=True)
         del ckpt["config"]["normalization"]
         torch.save(ckpt, path)
+        # Remove SHA256 sidecar to simulate pre-IC-32 checkpoint
+        sha256_path = path.with_suffix(path.suffix + ".sha256")
+        if sha256_path.exists():
+            sha256_path.unlink()
         pred = Predictor.from_checkpoint(str(path), cfg)
         assert len(pred.class_names) == 10
 

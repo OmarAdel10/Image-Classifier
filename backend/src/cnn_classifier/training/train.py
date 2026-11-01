@@ -9,6 +9,7 @@ like Dropout stay in train mode) so BatchNorm running statistics stay
 frozen while the head trains.
 """
 
+import hashlib
 import json
 from collections.abc import Iterable
 from pathlib import Path
@@ -114,6 +115,22 @@ def _save_labels_sidecar(model_path: Path, class_names: list) -> None:
     atomic_write(labels_path, lambda tmp: tmp.write_text(json.dumps(list(class_names))))
 
 
+def _save_sha256_sidecar(model_path: Path) -> None:
+    """Write a SHA256 sidecar file for the checkpoint (IC-32).
+
+    The sidecar is named ``<model_stem>.sha256`` and contains the
+    hex-encoded SHA256 hash of the checkpoint file. This enables
+    integrity verification at load time to mitigate supply-chain
+    and tampering risks (CWE-345).
+    """
+    sha256_path = model_path.with_suffix(model_path.suffix + ".sha256")
+    hasher = hashlib.sha256()
+    with model_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+    atomic_write(sha256_path, lambda tmp: tmp.write_text(hasher.hexdigest()))
+
+
 def save_checkpoint(
     path: str | Path,
     model: nn.Module,
@@ -157,3 +174,5 @@ def save_checkpoint(
     atomic_write(model_path, lambda tmp: torch.save(payload, tmp))
     # Write sidecar labels.json next to the model checkpoint
     _save_labels_sidecar(model_path, class_names)
+    # Write SHA256 sidecar for integrity verification at load (IC-32)
+    _save_sha256_sidecar(model_path)
