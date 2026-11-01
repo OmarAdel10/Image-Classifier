@@ -36,4 +36,33 @@ void main() {
       expect(Config.isValidApiBaseUrl(Config.apiBaseUrl), isTrue);
     });
   });
+
+  group('Config.ensureValidApiBaseUrl (IC-60 enforcement)', () {
+    test('returns without throwing for a valid URL', () {
+      expect(
+        () => Config.ensureValidApiBaseUrl('http://localhost:8000'),
+        returnsNormally,
+      );
+    });
+
+    test('throws StateError for a non-http scheme', () {
+      expect(
+        () => Config.ensureValidApiBaseUrl('ftp://example.com'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Invalid API_BASE_URL'),
+          ),
+        ),
+      );
+    });
+
+    test('throws StateError for a URL without a host', () {
+      expect(
+        () => Config.ensureValidApiBaseUrl('http://'),
+        throwsA(isA<StateError>()),
+      );
+    });
+  });
 }
