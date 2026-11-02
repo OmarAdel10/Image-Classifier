@@ -233,7 +233,11 @@ class Config(BaseSettings):
                     and all(isinstance(name, str) for name in labels)
                 ):
                     return labels
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):  # pragma: no cover - coverage.py cannot track C-extension exceptions
+            except (
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                OSError,
+            ):  # pragma: no cover - coverage.py cannot track C-extension exceptions
                 pass  # pragma: no cover - coverage.py cannot track C-extension exceptions
 
         # 2. Try sidecar labels.json next to model_path (e.g., model.pt -> model_labels.json)
@@ -249,7 +253,11 @@ class Config(BaseSettings):
                     and all(isinstance(name, str) for name in labels)
                 ):
                     return labels
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):  # pragma: no cover - coverage.py cannot track C-extension exceptions
+            except (
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                OSError,
+            ):  # pragma: no cover - coverage.py cannot track C-extension exceptions
                 pass  # pragma: no cover - coverage.py cannot track C-extension exceptions
 
         # 3. Fallback to hardcoded CIFAR-10 classes
