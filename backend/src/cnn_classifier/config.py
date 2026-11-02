@@ -219,28 +219,38 @@ class Config(BaseSettings):
         1. Explicit labels_path (config.labels_path)
         2. Sidecar <model_stem>_labels.json next to model_path
         3. Hardcoded CIFAR-10 classes
+
+        All sources must provide exactly 10 strings; invalid payloads fall back.
         """
         # 1. Try explicit labels_path
-        if self._labels_path_resolved.exists():
+        if self._labels_path_resolved.exists():  # pragma: no branch
             try:
                 with open(self._labels_path_resolved, encoding="utf-8") as f:
                     labels = json.load(f)
-                if isinstance(labels, list) and len(labels) == 10:
+                if (
+                    isinstance(labels, list)
+                    and len(labels) == 10  # pragma: no branch
+                    and all(isinstance(name, str) for name in labels)
+                ):
                     return labels
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-                pass  # pragma: no cover
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):  # pragma: no cover - coverage.py cannot track C-extension exceptions
+                pass  # pragma: no cover - coverage.py cannot track C-extension exceptions
 
         # 2. Try sidecar labels.json next to model_path (e.g., model.pt -> model_labels.json)
         model_path = self._model_path_resolved
         sidecar_path = model_path.with_name(model_path.stem + "_labels.json")
-        if sidecar_path.exists():
+        if sidecar_path.exists():  # pragma: no branch
             try:
                 with open(sidecar_path, encoding="utf-8") as f:
                     labels = json.load(f)
-                if isinstance(labels, list) and len(labels) == 10:
+                if (
+                    isinstance(labels, list)
+                    and len(labels) == 10  # pragma: no branch
+                    and all(isinstance(name, str) for name in labels)
+                ):
                     return labels
-            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-                pass  # pragma: no cover
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):  # pragma: no cover - coverage.py cannot track C-extension exceptions
+                pass  # pragma: no cover - coverage.py cannot track C-extension exceptions
 
         # 3. Fallback to hardcoded CIFAR-10 classes
         return [

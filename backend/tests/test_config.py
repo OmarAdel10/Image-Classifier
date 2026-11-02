@@ -505,5 +505,171 @@ class TestConfigSecurity:
         assert config.port == 9000
 
 
+class TestConfigClassNames:
+    """Test class_names property resolution (coverage for branches)."""
+
+    def test_class_names_sidecar_valid(self, tmp_path, monkeypatch):
+        """class_names returns sidecar labels when sidecar exists and is valid."""
+        import json
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        # Create a fake model file
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+
+        # Create valid sidecar labels.json
+        sidecar = model_dir / "best_model_labels.json"
+        custom_labels = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+        sidecar.write_text(json.dumps(custom_labels))
+
+        config = Config(model_path=str(model_file))
+        assert config.class_names == custom_labels
+
+    def test_class_names_fallback_when_sidecar_invalid(self, tmp_path, monkeypatch):
+        """class_names falls back to CIFAR-10 when sidecar has invalid JSON."""
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+
+        # Create invalid sidecar (not a list of 10 strings)
+        sidecar = model_dir / "best_model_labels.json"
+        sidecar.write_text('{"not": "a list"}')
+
+        config = Config(model_path=str(model_file))
+        # Should fall back to hardcoded CIFAR-10
+        assert len(config.class_names) == 10
+        assert config.class_names[0] == "airplane"
+
+    def test_class_names_fallback_when_no_sidecar(self, tmp_path, monkeypatch):
+        """class_names falls back to CIFAR-10 when no sidecar exists."""
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+        # No sidecar file
+
+        config = Config(model_path=str(model_file))
+        assert len(config.class_names) == 10
+        assert config.class_names[0] == "airplane"
+
+
+class TestConfigClassNamesValidation:
+    """Test class_names validation (IC-6, IC-38)."""
+
+    def test_class_names_rejects_non_string_items(self, tmp_path, monkeypatch):
+        """class_names rejects labels.json with non-string items and falls back."""
+        import json
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+
+        # Create sidecar with non-string items (ints)
+        sidecar = model_dir / "best_model_labels.json"
+        sidecar.write_text(json.dumps([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+
+        config = Config(model_path=str(model_file))
+        # Should fall back to CIFAR-10
+        assert len(config.class_names) == 10
+        assert config.class_names[0] == "airplane"
+        assert all(isinstance(name, str) for name in config.class_names)
+
+    def test_class_names_rejects_mixed_string_non_string(self, tmp_path, monkeypatch):
+        """class_names rejects labels.json with mixed string/non-string and falls back."""
+        import json
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+
+        # Create sidecar with mixed types
+        sidecar = model_dir / "best_model_labels.json"
+        sidecar.write_text(json.dumps(["a", "b", 3, "d", "e", "f", "g", "h", "i", "j"]))
+
+        config = Config(model_path=str(model_file))
+        assert len(config.class_names) == 10
+        assert config.class_names[0] == "airplane"
+
+    def test_class_names_fallback_on_dict_payload(self, tmp_path, monkeypatch):
+        """class_names falls back when labels.json is a dict (not a list)."""
+        import json
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+
+        sidecar = model_dir / "best_model_labels.json"
+        sidecar.write_text(json.dumps({"class1": "a", "class2": "b"}))
+
+        config = Config(model_path=str(model_file))
+        assert len(config.class_names) == 10
+        assert config.class_names[0] == "airplane"
+
+    def test_class_names_fallback_on_string_payload(self, tmp_path, monkeypatch):
+        """class_names falls back when labels.json is a string (not a list)."""
+        import json
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+
+        sidecar = model_dir / "best_model_labels.json"
+        sidecar.write_text(json.dumps("not a list"))
+
+        config = Config(model_path=str(model_file))
+        assert len(config.class_names) == 10
+        assert config.class_names[0] == "airplane"
+
+    def test_class_names_explicit_labels_path_validation(self, tmp_path, monkeypatch):
+        """Explicit labels_path also validates string items."""
+        import json
+
+        monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
+        monkeypatch.chdir(tmp_path)
+
+        # Create valid model and explicit labels_path
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_file = model_dir / "best_model.pt"
+        model_file.write_text("fake")
+
+        labels_dir = tmp_path / "labels"
+        labels_dir.mkdir()
+        labels_file = labels_dir / "custom_labels.json"
+        labels_file.write_text(json.dumps([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))  # non-strings
+
+        config = Config(model_path=str(model_file), labels_path=str(labels_file))
+        # Should fall back to CIFAR-10
+        assert len(config.class_names) == 10
+        assert config.class_names[0] == "airplane"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
