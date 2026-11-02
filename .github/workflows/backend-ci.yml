@@ -87,4 +87,4 @@ jobs:
         working-directory: backend
         env:
           CNN_TEST_DATA_DIR: /home/runner/.cache/cnn-cifar10
-        run: python -m pytest tests/ -v
+        run: python -m pytest tests/ --cov=cnn_classifier --cov-branch --cov-fail-under=100 -v

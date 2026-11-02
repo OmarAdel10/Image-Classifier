@@ -54,6 +54,9 @@ backend/data/
 # Python test/build artifacts
 .coverage
 *.egg-info/
+__pycache__/
+.pytest_cache/
+.venv/
 
 # Training outputs and local secrets
 backend/checkpoints/
