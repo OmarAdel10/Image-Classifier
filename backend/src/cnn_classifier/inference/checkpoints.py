@@ -6,6 +6,7 @@ explicit ``map_location`` and fails with informative errors on
 missing/corrupt files.
 """
 
+import hashlib
 import json
 import stat
 from pathlib import Path
@@ -14,6 +15,44 @@ import torch
 
 # Keys inference needs from any checkpoint written by save_checkpoint.
 _REQUIRED_KEYS = {"model_state", "config", "class_names"}
+
+
+def _verify_sha256_sidecar(model_path: Path) -> None:
+    """Verify the checkpoint against its SHA256 sidecar (IC-32).
+
+    The sidecar file is ``<model_stem>.sha256`` next to the checkpoint.
+    If the sidecar exists, its content must match the computed SHA256
+    of the checkpoint file. If the sidecar is missing, the check is
+    skipped (backward compatibility for checkpoints created before IC-32).
+    This provides integrity verification to mitigate supply-chain and
+    tampering risks (CWE-345).
+    """
+    sha256_path = model_path.with_suffix(model_path.suffix + ".sha256")
+    if not sha256_path.exists():
+        return  # No sidecar -> skip (backward compat)
+    try:
+        expected = sha256_path.read_text().strip()
+    except OSError:
+        return  # Unreadable sidecar -> skip (backward compat)
+    if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+        raise ValueError(f"malformed SHA256 sidecar: {sha256_path}")
+    hasher = hashlib.sha256()
+    with model_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            hasher.update(chunk)
+    actual = hasher.hexdigest()
+    if not _constant_time_compare(actual, expected):
+        raise ValueError(f"checkpoint integrity check failed: {model_path}")
+
+
+def _constant_time_compare(a: str, b: str) -> bool:
+    """Constant-time string comparison to prevent timing attacks."""
+    if len(a) != len(b):
+        return False
+    result = 0
+    for ca, cb in zip(a, b):
+        result |= ord(ca) ^ ord(cb)
+    return result == 0
 
 
 def _load_labels_sidecar(model_path: Path) -> list | None:
@@ -54,6 +93,10 @@ def load_checkpoint(path: str | Path) -> dict:
     stat_result = path.stat()
     if not stat.S_ISREG(stat_result.st_mode):
         raise ValueError(f"not a regular file: {path}")
+    # SHA256 sidecar integrity verification (IC-32): verifies checkpoint
+    # hasn't been tampered with since training. Sidecar missing = skip
+    # (backward compat for pre-IC-32 checkpoints).
+    _verify_sha256_sidecar(path)
     try:
         checkpoint = torch.load(path, weights_only=True, map_location="cpu")
     except Exception as exc:

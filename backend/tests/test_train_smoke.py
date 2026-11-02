@@ -255,6 +255,173 @@ class TestCheckpoint:
         assert not list(path.parent.glob("*.tmp*"))
 
 
+class TestCheckpointSHA256:
+    """Tests for SHA256 sidecar integrity verification (IC-32)."""
+
+    def test_save_checkpoint_creates_sha256_sidecar(self, tmp_path):
+        """save_checkpoint writes a .sha256 sidecar next to the checkpoint."""
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=3,
+            best_val_acc=0.42,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+        sha256_path = ckpt_path.with_suffix(ckpt_path.suffix + ".sha256")
+        assert sha256_path.exists()
+        expected_hash = sha256_path.read_text().strip()
+        assert len(expected_hash) == 64
+        assert all(c in "0123456789abcdef" for c in expected_hash)
+        # Verify the hash matches the file content
+        import hashlib
+
+        hasher = hashlib.sha256()
+        with ckpt_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hasher.update(chunk)
+        assert hasher.hexdigest() == expected_hash
+
+    def test_load_checkpoint_verifies_sha256_sidecar(self, tmp_path):
+        """load_checkpoint verifies the SHA256 sidecar and rejects tampered checkpoints."""
+        from cnn_classifier.inference.checkpoints import load_checkpoint
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=3,
+            best_val_acc=0.42,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+        # Valid checkpoint loads successfully
+        checkpoint = load_checkpoint(ckpt_path)
+        assert checkpoint["epoch"] == 3
+
+    def test_load_checkpoint_rejects_tampered_checkpoint(self, tmp_path):
+        """load_checkpoint raises ValueError when checkpoint is tampered."""
+        from cnn_classifier.inference.checkpoints import load_checkpoint
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=3,
+            best_val_acc=0.42,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+        # Tamper with the checkpoint file
+        ckpt_path.write_bytes(b"TAMPERED")
+        with pytest.raises(ValueError, match="checkpoint integrity check failed"):
+            load_checkpoint(ckpt_path)
+
+    def test_load_checkpoint_rejects_mismatched_sha256(self, tmp_path):
+        """load_checkpoint raises ValueError when SHA256 sidecar doesn't match."""
+        from cnn_classifier.inference.checkpoints import load_checkpoint
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=3,
+            best_val_acc=0.42,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+        # Corrupt the SHA256 sidecar
+        sha256_path = ckpt_path.with_suffix(ckpt_path.suffix + ".sha256")
+        sha256_path.write_text("0" * 64)
+        with pytest.raises(ValueError, match="checkpoint integrity check failed"):
+            load_checkpoint(ckpt_path)
+
+    def test_load_checkpoint_skips_sha256_when_missing(self, tmp_path):
+        """load_checkpoint skips SHA256 verification when sidecar is missing (backward compat)."""
+        import torch
+
+        from cnn_classifier.inference.checkpoints import load_checkpoint
+
+        # Create a checkpoint without a SHA256 sidecar (simulate pre-IC-32)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        payload = {
+            "model_state": model.state_dict(),
+            "optimizer_state": opt.state_dict(),
+            "epoch": 1,
+            "best_val_acc": 0.5,
+            "config": {
+                "model_name": "cnn_scratch",
+                "input_size": (32, 32),
+                "seed": cfg.seed,
+                "device": "cpu",
+                "batch_size": 2,
+                "normalization": {
+                    "mean": (0.4914, 0.4822, 0.4465),
+                    "std": (0.2470, 0.2435, 0.2616),
+                },
+            },
+            "class_names": CLASS_NAMES,
+        }
+        torch.save(payload, ckpt_path)
+        # Should load without SHA256 sidecar
+        checkpoint = load_checkpoint(ckpt_path)
+        assert checkpoint["epoch"] == 1
+
+    def test_load_checkpoint_rejects_malformed_sha256(self, tmp_path):
+        """load_checkpoint raises ValueError for malformed SHA256 sidecar content."""
+        from cnn_classifier.inference.checkpoints import load_checkpoint
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=3,
+            best_val_acc=0.42,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+        # Write malformed SHA256 (wrong length)
+        sha256_path = ckpt_path.with_suffix(ckpt_path.suffix + ".sha256")
+        sha256_path.write_text("short")
+        with pytest.raises(ValueError, match="malformed SHA256 sidecar"):
+            load_checkpoint(ckpt_path)
+
+
 class TestScriptEntryPoints:
     """Import + argparse tests for the CLI scripts (full runs are too slow)."""
 
@@ -1018,6 +1185,7 @@ class TestFixRoundThreeBehavioral:
         checkpoint_dir = tmp_path / "checkpoints"
         assert {p.name for p in checkpoint_dir.iterdir()} == {
             "best_model.pt",
+            "best_model.pt.sha256",  # SHA256 sidecar (IC-32)
             "labels.json",
             "classification_report.json",
             "best_model_labels.json",  # sidecar labels from checkpoint

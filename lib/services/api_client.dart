@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:http/http.dart' as http;
@@ -87,9 +88,35 @@ class ApiClient {
   /// Predicts using an [XFile] (from image_picker/file_picker).
   ///
   /// Uses [XFile.path] for file upload. On platforms where path is unavailable
-  /// (e.g., web), the caller should use [predict] with bytes directly.
+  /// (e.g., web), the caller should use [predictBytes] instead.
   Future<PredictionResponse> predictXFile(XFile xFile) async {
     return predict(File(xFile.path));
+  }
+
+  /// Predicts using raw image bytes (for web platforms where XFile.path is unavailable).
+  ///
+  /// Accepts [bytes] (Uint8List) and a [fileName] for the multipart upload.
+  /// This is the recommended method for web platforms where [XFile.path] returns
+  /// null or throws. On mobile/desktop, prefer [predictXFile] or [predict].
+  Future<PredictionResponse> predictBytes(
+    Uint8List bytes,
+    String fileName,
+  ) async {
+    return _handleRequest(() async {
+      final request =
+          http.MultipartRequest('POST', Uri.parse('$_baseUrl/predict'))
+            ..files.add(
+              http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+            );
+
+      final streamedResponse = await client.send(request).timeout(_timeout);
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        return PredictionResponse.fromJson(_parseJsonMap(response.body));
+      }
+      throw _toApiException(response);
+    });
   }
 
   /// Closes the underlying [http.Client] if it was created by this instance.

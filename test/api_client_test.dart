@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -313,6 +314,135 @@ void main() {
       apiClient = ApiClient(client: mockClient);
 
       expect(() => apiClient.predictXFile(xFile), throwsA(isA<ApiException>()));
+    });
+
+    group('predictBytes (web)', () {
+      test('predictBytes returns PredictionResponse on 200', () async {
+        final bytes = Uint8List.fromList([
+          0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+          0x00, 0x00, 0x00, 0x0D, // IHDR chunk length
+          0x49, 0x48, 0x44, 0x52, // IHDR
+          0x00, 0x00, 0x00, 0x01, // width: 1
+          0x00, 0x00, 0x00, 0x01, // height: 1
+          0x08,
+          0x02,
+          0x00,
+          0x00,
+          0x00, // bit depth, color type, compression, filter, interlace
+          0x90, 0x77, 0x53, 0xDE, // CRC
+          0x00, 0x00, 0x00, 0x0C, // IDAT chunk length
+          0x49, 0x44, 0x41, 0x54, // IDAT
+          0x08,
+          0xD7,
+          0x63,
+          0xF8,
+          0xCF,
+          0xC0,
+          0x00,
+          0x00,
+          0x03,
+          0x01,
+          0x01,
+          0x00,
+          0x18, 0xDD, 0x8D, 0xB4, // compressed data + CRC
+          0x00, 0x00, 0x00, 0x00, // IEND chunk length
+          0x49, 0x45, 0x4E, 0x44, // IEND
+          0xAE, 0x42, 0x60, 0x82, // CRC
+        ]);
+        mockClient = MockClient((request) async {
+          expect(request.url.toString(), endsWith('/predict'));
+          expect(request.method, 'POST');
+          return http.Response(
+            jsonEncode({
+              'predictions': [
+                {'class_name': 'cat', 'confidence': 0.9},
+                {'class_name': 'dog', 'confidence': 0.1},
+              ],
+              'latency_ms': 42.5,
+              'model': 'cnn_scratch',
+            }),
+            200,
+          );
+        });
+        apiClient = ApiClient(client: mockClient);
+
+        final result = await apiClient.predictBytes(bytes, 'test_image.png');
+
+        expect(result, isA<PredictionResponse>());
+        expect(result.predictions, hasLength(2));
+        expect(result.predictions.first.className, 'cat');
+        expect(result.predictions.first.confidence, 0.9);
+        expect(result.predictions.last.className, 'dog');
+        expect(result.predictions.last.confidence, 0.1);
+        expect(result.latencyMs, 42.5);
+        expect(result.model, 'cnn_scratch');
+      });
+
+      test('predictBytes throws ApiException on 400', () async {
+        final bytes = Uint8List.fromList([0x00]);
+        mockClient = MockClient((request) async {
+          return http.Response('{"detail": "file must be an image"}', 400);
+        });
+        apiClient = ApiClient(client: mockClient);
+
+        expect(
+          () => apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(isA<ApiException>()),
+        );
+      });
+
+      test('predictBytes throws ApiException on 413', () async {
+        final bytes = Uint8List.fromList([0x00]);
+        mockClient = MockClient((request) async {
+          return http.Response('{"detail": "image file too large"}', 413);
+        });
+        apiClient = ApiClient(client: mockClient);
+
+        expect(
+          () => apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(isA<ApiException>()),
+        );
+      });
+
+      test('predictBytes throws ApiException on 500', () async {
+        final bytes = Uint8List.fromList([0x00]);
+        mockClient = MockClient((request) async {
+          return http.Response('{"detail": "model inference failed"}', 500);
+        });
+        apiClient = ApiClient(client: mockClient);
+
+        expect(
+          () => apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(isA<ApiException>()),
+        );
+      });
+
+      test('predictBytes throws ApiException on timeout', () async {
+        final bytes = Uint8List.fromList([0x00]);
+        mockClient = MockClient((request) async {
+          await Future.delayed(const Duration(seconds: 35));
+          return http.Response('{}', 200);
+        });
+        apiClient = ApiClient(client: mockClient);
+
+        expect(
+          () => apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(isA<ApiException>()),
+        );
+      });
+
+      test('predictBytes throws ApiException on network error', () async {
+        final bytes = Uint8List.fromList([0x00]);
+        mockClient = MockClient((request) async {
+          throw SocketException('Connection refused');
+        });
+        apiClient = ApiClient(client: mockClient);
+
+        expect(
+          () => apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(isA<ApiException>()),
+        );
+      });
     });
   });
 
