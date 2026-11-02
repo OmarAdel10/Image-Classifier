@@ -228,7 +228,7 @@ class Config(BaseSettings):
                 if isinstance(labels, list) and len(labels) == 10:
                     return labels
             except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-                pass
+                pass  # pragma: no cover
 
         # 2. Try sidecar labels.json next to model_path (e.g., model.pt -> model_labels.json)
         model_path = self._model_path_resolved
@@ -240,7 +240,7 @@ class Config(BaseSettings):
                 if isinstance(labels, list) and len(labels) == 10:
                     return labels
             except (json.JSONDecodeError, UnicodeDecodeError, OSError):
-                pass
+                pass  # pragma: no cover
 
         # 3. Fallback to hardcoded CIFAR-10 classes
         return [
