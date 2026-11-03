@@ -124,7 +124,8 @@ class TestConfig:
         monkeypatch.setenv("CNN_DEVICE", "auto")
         monkeypatch.setenv("CNN_INPUT_SIZE", "64,64")
         monkeypatch.setenv("CNN_BATCH_SIZE", "128")
-        monkeypatch.setenv("CNN_NUM_WORKERS", "8")
+        # Use 4 workers (within typical CI cpu_count of 4)
+        monkeypatch.setenv("CNN_NUM_WORKERS", "4")
         monkeypatch.setenv("CNN_SEED", "999")
 
         clear_config_cache()
@@ -136,7 +137,7 @@ class TestConfig:
         assert config.device in ("cpu", "cuda", "mps")
         assert config.input_size == (64, 64)
         assert config.batch_size == 128
-        assert config.num_workers == 8
+        assert config.num_workers == 4
         assert config.seed == 999
 
     def test_env_prefix_required(self, monkeypatch):
@@ -207,7 +208,11 @@ class TestConfigValidation:
     def test_num_workers_valid_boundaries(self):
         """Num workers accepts valid boundary values."""
         assert Config(num_workers=0).num_workers == 0
-        assert Config(num_workers=16).num_workers == 16
+        # Max is now cpu_count(), test with a value within limits
+        from cnn_classifier.config import _max_num_workers
+
+        max_workers = _max_num_workers()
+        assert Config(num_workers=max_workers).num_workers == max_workers
 
     def test_seed_valid_boundary(self):
         """Seed accepts 0."""
@@ -238,11 +243,9 @@ class TestConfigValidation:
         assert config.input_size == (32, 32)
 
     def test_validate_input_size_valid_tuple(self):
-        """Valid tuple/list pass through (via internal function)."""
-        from cnn_classifier.config import _parse_input_size
-
-        assert _parse_input_size((64, 64)) == (64, 64)
-        assert _parse_input_size([64, 64]) == (64, 64)
+        """Valid tuple/list pass through (via internal staticmethod)."""
+        assert Config._parse_input_size((64, 64)) == (64, 64)
+        assert Config._parse_input_size([64, 64]) == (64, 64)
 
     def test_input_size_kwarg_tuple_plan_contract(self):
         """Config accepts input_size as tuple kwarg (plan contract)."""
@@ -254,26 +257,24 @@ class TestConfigValidation:
         """Wrong-length string raises ValueError."""
         with pytest.raises(ValueError, match="2 dimensions"):
             Config(input_size="32,32,3")
+        with pytest.raises(ValueError, match="2 dimensions"):
+            Config(input_size="32")
 
     def test_validate_input_size_invalid_tuple_length(self):
         """Wrong-length list raises ValueError."""
-        from cnn_classifier.config import _parse_input_size
-
         with pytest.raises(ValueError, match="2 dimensions"):
-            _parse_input_size([32, 32, 3])
+            Config._parse_input_size([32, 32, 3])
 
     def test_parse_input_size_list_out_of_range(self):
         """List branch range check raises for zero/negative and over-max values."""
-        from cnn_classifier.config import _parse_input_size
-
         with pytest.raises(ValueError, match="positive"):
-            _parse_input_size([0, 32])
+            Config._parse_input_size([0, 32])
         with pytest.raises(ValueError, match="positive"):
-            _parse_input_size([-1, 32])
+            Config._parse_input_size([-1, 32])
         with pytest.raises(ValueError, match="positive and <= 4096"):
-            _parse_input_size([5000, 32])
+            Config._parse_input_size([5000, 32])
         with pytest.raises(ValueError, match="positive and <= 4096"):
-            _parse_input_size([32, 4097])
+            Config._parse_input_size([32, 4097])
 
     def test_image_and_batch_pixel_limit_exact_boundaries_accepted(self):
         """Configs at exactly MAX_IMAGE_PIXELS / MAX_BATCH_PIXELS are accepted."""
@@ -295,32 +296,28 @@ class TestConfigValidation:
 
     def test_validate_input_size_invalid_type(self):
         """Invalid type (dict, int, None) raises ValueError."""
-        from cnn_classifier.config import _parse_input_size
-
-        with pytest.raises(ValueError, match="tuple/list of 2 ints or comma-separated string"):
-            _parse_input_size({"h": 32, "w": 32})
+        with pytest.raises(ValueError, match="tuple/list of 2 ints"):
+            Config._parse_input_size({"h": 32, "w": 32})
         with pytest.raises(ValueError):
-            _parse_input_size(123)
+            Config._parse_input_size(123)
         with pytest.raises(ValueError):
-            _parse_input_size(None)
+            Config._parse_input_size(None)
 
     def test_validate_input_size_edge_cases(self):
         """Additional edge cases for input_size parsing."""
-        from cnn_classifier.config import _parse_input_size
-
         with pytest.raises(ValueError):
-            _parse_input_size("")  # empty string
+            Config._parse_input_size("")  # empty string
         with pytest.raises(ValueError):
-            _parse_input_size("32,abc")  # non-numeric
+            Config._parse_input_size("32,abc")  # non-numeric
         with pytest.raises(ValueError):
-            _parse_input_size("32.5,32")  # float
+            Config._parse_input_size("32.5,32")  # float
         with pytest.raises(ValueError):
-            _parse_input_size("32")  # single value
+            Config._parse_input_size("32")  # single value
         # Boundary max values
-        assert _parse_input_size("4096,32") == (4096, 32)
-        assert _parse_input_size("32,4096") == (32, 4096)
+        assert Config._parse_input_size("4096,32") == (4096, 32)
+        assert Config._parse_input_size("32,4096") == (32, 4096)
         # Whitespace variants
-        assert _parse_input_size("\t32\n,\r32\t") == (32, 32)
+        assert Config._parse_input_size("\t32\n,\r32\t") == (32, 32)
 
     def test_image_pixel_limit(self):
         """Combined image pixels (H*W) must not exceed MAX_IMAGE_PIXELS."""
