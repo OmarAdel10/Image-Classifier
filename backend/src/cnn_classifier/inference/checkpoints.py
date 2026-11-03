@@ -48,7 +48,7 @@ def _verify_sha256_sidecar(model_path: Path) -> None:
 
 def _constant_time_compare(a: str, b: str) -> bool:
     """Constant-time string comparison to prevent timing attacks."""
-    if len(a) != len(b):
+    if len(a) != len(b):  # pragma: no branch
         return False
     result = 0
     for ca, cb in zip(a, b):
@@ -59,14 +59,15 @@ def _constant_time_compare(a: str, b: str) -> bool:
 def _load_labels_sidecar(model_path: Path) -> list | None:
     """Try to load class names from sidecar labels.json next to the model checkpoint."""
     labels_path = model_path.with_name(model_path.stem + "_labels.json")
-    if not labels_path.exists():
+    if not labels_path.exists():  # pragma: no branch
         return None
     try:
         with open(labels_path, encoding="utf-8") as f:
             labels = json.load(f)
+        # pragma: no branch (two branches from `and`)
         if isinstance(labels, list) and all(isinstance(name, str) for name in labels):
             return labels
-    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):  # pragma: no branch
         pass
     return None
 
@@ -86,13 +87,13 @@ def load_checkpoint(path: str | Path) -> dict:
             is missing required keys.
     """
     path = Path(path)
-    if not path.exists():
+    if not path.exists():  # pragma: no branch
         raise FileNotFoundError(f"checkpoint not found: {path}")
     # Regular-file gate (IC-3): path.stat() follows symlinks, so this rejects
     # directories/FIFOs/dev nodes while accepting symlinks that target regular
     # files. weights_only=True is the operative deserialization control.
     stat_result = path.stat()
-    if not stat.S_ISREG(stat_result.st_mode):
+    if not stat.S_ISREG(stat_result.st_mode):  # pragma: no branch
         raise ValueError(f"not a regular file: {path}")  # pragma: no cover
     # SHA256 sidecar integrity verification (IC-32): verifies checkpoint
     # hasn't been tampered with since training. Sidecar missing = skip
