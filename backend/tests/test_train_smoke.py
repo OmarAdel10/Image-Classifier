@@ -1376,9 +1376,10 @@ class TestLoadCheckpointWithSidecar:
 
     def test_load_checkpoint_with_sidecar_valid_labels(self, tmp_path):
         """load_checkpoint_with_sidecar merges valid sidecar labels."""
+        import json
+
         from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
         from cnn_classifier.training.train import save_checkpoint
-        import json
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
         model = get_model("cnn_scratch", cfg)
@@ -1456,9 +1457,10 @@ class TestLoadCheckpointWithSidecar:
 
     def test_load_checkpoint_with_sidecar_non_string_items(self, tmp_path):
         """load_checkpoint_with_sidecar falls back on non-string items in sidecar."""
+        import json
+
         from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
         from cnn_classifier.training.train import save_checkpoint
-        import json
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
         model = get_model("cnn_scratch", cfg)
@@ -1484,9 +1486,10 @@ class TestLoadCheckpointWithSidecar:
 
     def test_load_checkpoint_with_sidecar_wrong_length(self, tmp_path):
         """load_checkpoint_with_sidecar falls back on wrong length list."""
+        import json
+
         from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
         from cnn_classifier.training.train import save_checkpoint
-        import json
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
         model = get_model("cnn_scratch", cfg)
@@ -1514,7 +1517,6 @@ class TestLoadCheckpointWithSidecar:
         """load_checkpoint_with_sidecar handles unreadable sidecar (OSError)."""
         from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
         from cnn_classifier.training.train import save_checkpoint
-        import os
 
         cfg = Config(device="cpu", batch_size=2, num_workers=0)
         model = get_model("cnn_scratch", cfg)
