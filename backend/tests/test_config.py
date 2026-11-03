@@ -124,7 +124,8 @@ class TestConfig:
         monkeypatch.setenv("CNN_DEVICE", "auto")
         monkeypatch.setenv("CNN_INPUT_SIZE", "64,64")
         monkeypatch.setenv("CNN_BATCH_SIZE", "128")
-        monkeypatch.setenv("CNN_NUM_WORKERS", "8")
+        # Use 4 workers (within typical CI cpu_count of 4)
+        monkeypatch.setenv("CNN_NUM_WORKERS", "4")
         monkeypatch.setenv("CNN_SEED", "999")
 
         clear_config_cache()
@@ -136,7 +137,7 @@ class TestConfig:
         assert config.device in ("cpu", "cuda", "mps")
         assert config.input_size == (64, 64)
         assert config.batch_size == 128
-        assert config.num_workers == 8
+        assert config.num_workers == 4
         assert config.seed == 999
 
     def test_env_prefix_required(self, monkeypatch):
