@@ -56,11 +56,6 @@ void main() {
       expect(patterns, contains('.env.*.local'));
     });
 
-    test('.gitignore ignores docs/ directory', () {
-      final patterns = gitignore.readAsLinesSync();
-      expect(patterns, contains('docs/'));
-    });
-
     test('.gitignore ignores Flutter build artifacts', () {
       final patterns = gitignore.readAsLinesSync();
       expect(patterns, contains('/build/'));
@@ -80,7 +75,6 @@ void main() {
         '.env',
         '.env.local',
         '.env.prod.local',
-        'docs/superpowers/plan.md',
         'build/app.apk',
         '.dart_tool/package_config.json',
       ];

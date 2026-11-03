@@ -101,3 +101,9 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             image-classifier-linux.zip
+
+      # IC-15: SLSA provenance attestation for release artifacts
+      - name: Generate SLSA provenance
+        uses: actions/attest-build-provenance@682e4328f3a1d84c3d2db0a7d4511e141e3f3e05
+        with:
+          subject-path: image-classifier-linux.zip
