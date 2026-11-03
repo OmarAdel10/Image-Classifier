@@ -1369,3 +1369,178 @@ class TestFixRoundFiveFrozenEval:
         _enforce_frozen_backbone_eval(model)
         assert model.backbone.training is True
         assert model.frozen_layer.training is False
+
+
+class TestLoadCheckpointWithSidecar:
+    """Test load_checkpoint_with_sidecar (covers _load_labels_sidecar branches)."""
+
+    def test_load_checkpoint_with_sidecar_valid_labels(self, tmp_path):
+        """load_checkpoint_with_sidecar merges valid sidecar labels."""
+        import json
+
+        from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=1,
+            best_val_acc=0.5,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+
+        # Create valid sidecar labels.json
+        sidecar = ckpt_path.with_name(ckpt_path.stem + "_labels.json")
+        custom_labels = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
+        sidecar.write_text(json.dumps(custom_labels))
+
+        checkpoint = load_checkpoint_with_sidecar(ckpt_path)
+        assert checkpoint["class_names"] == custom_labels
+
+    def test_load_checkpoint_with_sidecar_missing_sidecar(self, tmp_path):
+        """load_checkpoint_with_sidecar uses checkpoint labels when sidecar missing."""
+        from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=1,
+            best_val_acc=0.5,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+
+        # No sidecar file
+        checkpoint = load_checkpoint_with_sidecar(ckpt_path)
+        assert checkpoint["class_names"] == CLASS_NAMES
+
+    def test_load_checkpoint_with_sidecar_invalid_json(self, tmp_path):
+        """load_checkpoint_with_sidecar falls back on invalid JSON in sidecar."""
+        from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=1,
+            best_val_acc=0.5,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+
+        # Create invalid JSON in sidecar
+        sidecar = ckpt_path.with_name(ckpt_path.stem + "_labels.json")
+        sidecar.write_text("{ invalid json")
+
+        checkpoint = load_checkpoint_with_sidecar(ckpt_path)
+        assert checkpoint["class_names"] == CLASS_NAMES
+
+    def test_load_checkpoint_with_sidecar_non_string_items(self, tmp_path):
+        """load_checkpoint_with_sidecar falls back on non-string items in sidecar."""
+        import json
+
+        from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=1,
+            best_val_acc=0.5,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+
+        # Create sidecar with non-string items
+        sidecar = ckpt_path.with_name(ckpt_path.stem + "_labels.json")
+        sidecar.write_text(json.dumps([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+
+        checkpoint = load_checkpoint_with_sidecar(ckpt_path)
+        assert checkpoint["class_names"] == CLASS_NAMES
+
+    def test_load_checkpoint_with_sidecar_wrong_length(self, tmp_path):
+        """load_checkpoint_with_sidecar falls back on wrong length list."""
+        import json
+
+        from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=1,
+            best_val_acc=0.5,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+
+        # Create sidecar with wrong length
+        sidecar = ckpt_path.with_name(ckpt_path.stem + "_labels.json")
+        sidecar.write_text(json.dumps(["a", "b", "c"]))
+
+        checkpoint = load_checkpoint_with_sidecar(ckpt_path)
+        assert checkpoint["class_names"] == CLASS_NAMES
+
+    def test_load_checkpoint_with_sidecar_unreadable_file(self, tmp_path):
+        """load_checkpoint_with_sidecar handles unreadable sidecar (OSError)."""
+        from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
+        from cnn_classifier.training.train import save_checkpoint
+
+        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        model = get_model("cnn_scratch", cfg)
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        ckpt_path = tmp_path / "best_model.pt"
+        save_checkpoint(
+            ckpt_path,
+            model,
+            opt,
+            epoch=1,
+            best_val_acc=0.5,
+            model_name="cnn_scratch",
+            config=cfg,
+            class_names=CLASS_NAMES,
+        )
+
+        # Create sidecar and make it unreadable
+        sidecar = ckpt_path.with_name(ckpt_path.stem + "_labels.json")
+        sidecar.write_text("valid")
+        sidecar.chmod(0o000)
+
+        try:
+            checkpoint = load_checkpoint_with_sidecar(ckpt_path)
+            assert checkpoint["class_names"] == CLASS_NAMES
+        finally:
+            # Restore permissions for cleanup
+            sidecar.chmod(0o644)

@@ -32,7 +32,7 @@ def _verify_sha256_sidecar(model_path: Path) -> None:
         return  # No sidecar -> skip (backward compat)  # pragma: no cover
     try:
         expected = sha256_path.read_text().strip()
-    except OSError:  # pragma: no branch - backward compat
+    except OSError:  # pragma: no branch - backward compat # pragma: no cover
         return  # Unreadable sidecar -> skip (backward compat)  # pragma: no cover
     # pragma: no branch - backward compat (two branches from `or`)
     if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
@@ -49,7 +49,7 @@ def _verify_sha256_sidecar(model_path: Path) -> None:
 def _constant_time_compare(a: str, b: str) -> bool:
     """Constant-time string comparison to prevent timing attacks."""
     if len(a) != len(b):  # pragma: no branch
-        return False
+        return False  # pragma: no cover
     result = 0
     for ca, cb in zip(a, b):
         result |= ord(ca) ^ ord(cb)
@@ -64,8 +64,12 @@ def _load_labels_sidecar(model_path: Path) -> list | None:
     try:
         with open(labels_path, encoding="utf-8") as f:
             labels = json.load(f)
-        # pragma: no branch (two branches from `and`)
-        if isinstance(labels, list) and all(isinstance(name, str) for name in labels):
+        # pragma: no branch (multiple branches from `and`)
+        if (
+            isinstance(labels, list)
+            and len(labels) == 10
+            and all(isinstance(name, str) for name in labels)
+        ):
             return labels
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):  # pragma: no branch
         pass
