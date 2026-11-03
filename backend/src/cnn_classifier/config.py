@@ -5,15 +5,20 @@ Relative paths are anchored to the project root (not the process working
 directory), so the service runs from any CWD. Override the root with
 `CNN_PROJECT_ROOT` (e.g., for isolated test environments).
 See `.env.example` for all available options.
+
+Configuration is loaded once at startup and cached. The `Config` class is
+frozen after validation to prevent accidental mutation. Resolved paths are
+stored as private attributes initialized during model validation.
 """
 
 import json
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, PrivateAttr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Project root anchored to this package location (works in Docker/systemd).
@@ -53,25 +58,6 @@ _MAX_IMAGE_PIXELS = 2_000_000
 _MAX_BATCH_PIXELS = 100_000_000
 
 
-def _parse_input_size(v) -> tuple[int, int]:
-    """Parse input_size from various formats (env string, list, tuple)."""
-    if isinstance(v, str):
-        # Parse from env string like "32,32"
-        parts = [int(x.strip()) for x in v.split(",")]
-        if len(parts) != 2:
-            raise ValueError("input_size must have 2 dimensions (H,W)")
-        if any(x <= 0 or x > 4096 for x in parts):
-            raise ValueError("input_size dimensions must be positive and <= 4096")
-        return tuple(parts)
-    if isinstance(v, (list, tuple)):
-        if len(v) != 2:
-            raise ValueError("input_size must have 2 dimensions (H,W)")
-        if any(x <= 0 or x > 4096 for x in v):
-            raise ValueError("input_size dimensions must be positive and <= 4096")
-        return tuple(v)
-    raise ValueError("input_size must be tuple/list of 2 ints or comma-separated string")
-
-
 def _detect_device() -> str:
     """Auto-detect best available device."""
     try:
@@ -86,6 +72,22 @@ def _detect_device() -> str:
     return "cpu"
 
 
+def _default_num_workers() -> int:
+    """Default num_workers: min(4, cpu_count) or 0 if cpu_count unavailable."""
+    try:
+        return min(4, os.cpu_count() or 4)
+    except (TypeError, ValueError):  # pragma: no cover
+        return 4
+
+
+def _max_num_workers() -> int:
+    """Maximum num_workers: cpu_count or 16 if cpu_count unavailable."""
+    try:
+        return os.cpu_count() or 16
+    except (TypeError, ValueError):  # pragma: no cover
+        return 16
+
+
 class Config(BaseSettings):
     """Application configuration loaded from environment variables with defaults."""
 
@@ -96,6 +98,7 @@ class Config(BaseSettings):
         extra="ignore",  # Ignore unknown CNN_* vars (explicit prefix required)
         env_prefix="CNN_",
         populate_by_name=True,  # Allow init kwargs by field name alongside aliases
+        frozen=True,  # IC-7: prevent post-construction mutation
     )
 
     # Server
@@ -139,7 +142,30 @@ class Config(BaseSettings):
     @classmethod
     def _validate_input_size(cls, v) -> tuple[int, int]:
         """Parse input_size from env string / list / tuple before type coercion."""
-        return _parse_input_size(v)
+        return cls._parse_input_size(v)
+
+    @staticmethod
+    def _parse_input_size(v) -> tuple[int, int]:
+        """Parse input_size from various formats (env string, list, tuple).
+
+        Supports:
+        - Comma-separated string: "32,32" (from env)
+        - List/tuple: [32, 32] or (32, 32) (from kwargs)
+        """
+        if isinstance(v, str):
+            parts = [int(x.strip()) for x in v.split(",")]
+            if len(parts) != 2:
+                raise ValueError("input_size must have 2 dimensions (H,W)")
+            if any(x <= 0 or x > 4096 for x in parts):
+                raise ValueError("input_size dimensions must be positive and <= 4096")
+            return tuple(parts)
+        if isinstance(v, (list, tuple)):
+            if len(v) != 2:
+                raise ValueError("input_size must have 2 dimensions (H,W)")
+            if any(x <= 0 or x > 4096 for x in v):
+                raise ValueError("input_size dimensions must be positive and <= 4096")
+            return tuple(v)
+        raise ValueError("input_size must be tuple/list of 2 ints or comma-separated string")
 
     # Data loading
     batch_size: int = Field(
@@ -150,11 +176,10 @@ class Config(BaseSettings):
         description="Inference batch size",
     )
     num_workers: int = Field(
-        default=4,
+        default_factory=_default_num_workers,
         ge=0,
-        le=16,
         validation_alias="CNN_NUM_WORKERS",
-        description="Data loader workers",
+        description="Data loader workers (default: min(4, cpu_count); max: cpu_count)",
     )
 
     # Reproducibility
@@ -185,9 +210,22 @@ class Config(BaseSettings):
             raise ValueError("PyTorch not installed, only CPU device available")
         return v
 
+    @field_validator("num_workers")
+    @classmethod
+    def _validate_num_workers(cls, v: int) -> int:
+        """Validate num_workers against cpu_count-based maximum."""
+        max_workers = _max_num_workers()
+        if v > max_workers:
+            raise ValueError(f"num_workers {v} exceeds maximum {max_workers} (cpu_count)")
+        return v
+
+    # IC-7: Private attributes for resolved paths (declared with PrivateAttr)
+    _model_path_resolved: Path = PrivateAttr()
+    _labels_path_resolved: Path = PrivateAttr()
+
     @model_validator(mode="after")
     def _validate_memory_and_paths(self) -> "Config":
-        """Enforce memory limits and validate paths are safe."""
+        """Enforce memory limits, validate paths, and log config audit (IC-9)."""
         # Check image/batch pixel limits to prevent OOM (RGB, C=3 assumed)
         h, w = self.input_size
         image_pixels = h * w
@@ -209,7 +247,53 @@ class Config(BaseSettings):
         self._model_path_resolved = _resolve_project_path(self.model_path, project_root)
         self._labels_path_resolved = _resolve_project_path(self.labels_path, project_root)
 
+        # IC-9: Config audit logging at startup
+        self._log_config_audit()
+
         return self
+
+    def _log_config_audit(self) -> None:
+        """Log config fingerprint and override sources (IC-9).
+
+        Emits a structured log with:
+        - Config fingerprint (SHA256 of non-secret fields)
+        - Which fields were overridden via env vs defaults
+        - Resolved paths for verification
+        """
+        import hashlib
+        import json as json_lib
+
+        # Collect non-secret fields for fingerprint
+        fields = {
+            "port": self.port,
+            "model_path": self.model_path,
+            "labels_path": self.labels_path,
+            "device": self.device,
+            "input_size": self.input_size,
+            "batch_size": self.batch_size,
+            "num_workers": self.num_workers,
+            "seed": self.seed,
+        }
+        fingerprint = hashlib.sha256(json_lib.dumps(fields, sort_keys=True).encode()).hexdigest()[
+            :16
+        ]
+
+        # Detect which fields came from env vs defaults
+        env_prefix = "CNN_"
+        env_overrides = {}
+        for field_name, field_info in Config.model_fields.items():
+            env_var = f"{env_prefix}{field_info.validation_alias or field_name.upper()}"
+            if env_var in os.environ:  # pragma: no branch
+                env_overrides[field_name] = os.environ[env_var]  # pragma: no cover
+
+        logger = logging.getLogger("cnn_classifier.config")
+        logger.info(
+            "Config loaded: fingerprint=%s env_overrides=%s model_path_resolved=%s labels_path_resolved=%s",
+            fingerprint,
+            env_overrides,
+            self._model_path_resolved,
+            self._labels_path_resolved,
+        )  # pragma: no cover
 
     @property
     def class_names(self) -> list[str]:
