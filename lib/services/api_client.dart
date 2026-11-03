@@ -25,39 +25,67 @@ class ApiClient {
   /// Creates an [ApiClient] with the given [client], optional [baseUrl], and [timeout].
   ///
   /// The [client] is owned by the caller and should be disposed by the caller.
-  /// If [baseUrl] is not provided, uses [Config.apiBaseUrl].
+  /// If [baseUrl] is not provided, it is resolved from [Config.resolveApiBaseUrl]
+  /// (compile-time override > runtime override > platform default).
   /// If [timeout] is not provided, uses [Config.requestTimeout].
   ApiClient({required this.client, String? baseUrl, Duration? timeout})
-    : _baseUrl = baseUrl ?? Config.apiBaseUrl,
+    : _explicitBaseUrl = baseUrl,
       _timeout = timeout ?? Config.requestTimeout;
 
   final http.Client client;
-  final String _baseUrl;
+  final String? _explicitBaseUrl;
   final Duration _timeout;
+
+  String? _resolvedBaseUrl;
+
+  /// The effective base URL for requests.
+  ///
+  /// Resolved lazily and cached. When no URL was passed to the constructor,
+  /// this consults [Config.resolveApiBaseUrl], which honours the runtime
+  /// override stored by the settings screen.
+  Future<String> get baseUrl async {
+    final explicit = _explicitBaseUrl;
+    if (explicit != null) return explicit;
+    final cached = _resolvedBaseUrl;
+    if (cached != null) return cached;
+    final resolved = await Config.resolveApiBaseUrl();
+    _resolvedBaseUrl = resolved;
+    return resolved;
+  }
+
+  /// Discards the cached base URL so the next request re-resolves it.
+  ///
+  /// Call after changing the runtime API base URL so the new value takes
+  /// effect without restarting the app.
+  void invalidateBaseUrlCache() {
+    _resolvedBaseUrl = null;
+  }
 
   /// Checks if the backend is healthy.
   Future<bool> healthCheck() async {
+    final url = await baseUrl;
     try {
       final response = await client
-          .get(Uri.parse('$_baseUrl/health'))
+          .get(Uri.parse('$url/health'))
           .timeout(_timeout);
       return response.statusCode == 200;
-    } on TimeoutException catch (_) {
+    } on TimeoutException {
       return false;
-    } on SocketException catch (_) {
+    } on SocketException {
       return false;
-    } on HttpException catch (_) {
+    } on HttpException {
       return false;
-    } on FormatException catch (_) {
+    } on FormatException {
       return false;
     }
   }
 
   /// Gets model metadata from the backend.
   Future<ModelInfo> getModelInfo() async {
-    return _handleRequest(() async {
+    final url = await baseUrl;
+    return _handleRequest(url, () async {
       final response = await client
-          .get(Uri.parse('$_baseUrl/model-info'))
+          .get(Uri.parse('$url/model-info'))
           .timeout(_timeout);
 
       if (response.statusCode == 200) {
@@ -69,11 +97,10 @@ class ApiClient {
 
   /// Classifies an image and returns ranked predictions.
   Future<PredictionResponse> predict(File imageFile) async {
-    return _handleRequest(() async {
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('$_baseUrl/predict'),
-      )..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
+    final url = await baseUrl;
+    return _handleRequest(url, () async {
+      final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
+        ..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
 
       final streamedResponse = await client.send(request).timeout(_timeout);
       final response = await http.Response.fromStream(streamedResponse);
@@ -102,12 +129,12 @@ class ApiClient {
     Uint8List bytes,
     String fileName,
   ) async {
-    return _handleRequest(() async {
-      final request =
-          http.MultipartRequest('POST', Uri.parse('$_baseUrl/predict'))
-            ..files.add(
-              http.MultipartFile.fromBytes('file', bytes, filename: fileName),
-            );
+    final url = await baseUrl;
+    return _handleRequest(url, () async {
+      final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
+        ..files.add(
+          http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+        );
 
       final streamedResponse = await client.send(request).timeout(_timeout);
       final response = await http.Response.fromStream(streamedResponse);
@@ -130,15 +157,33 @@ class ApiClient {
     // Override in a subclass if internal client management is added.
   }
 
-  Future<T> _handleRequest<T>(Future<T> Function() request) async {
+  /// Runs [request], translating transport failures into [ApiException].
+  ///
+  /// [url] is the base URL the request targets; it is included in the error
+  /// message so a connection failure points at the address that failed
+  /// instead of reporting a bare "Network error".
+  Future<T> _handleRequest<T>(String url, Future<T> Function() request) async {
     try {
       return await request();
-    } on TimeoutException catch (_) {
-      throw const ApiException(message: 'Request timed out', statusCode: 408);
-    } on SocketException catch (_) {
-      throw const ApiException(message: 'Network error', statusCode: 503);
-    } on HttpException catch (_) {
-      throw const ApiException(message: 'HTTP error', statusCode: 502);
+    } on TimeoutException {
+      throw ApiException(
+        message:
+            'Request to $url timed out after ${_timeout.inSeconds}s. '
+            'Is the backend running at $url?',
+        statusCode: 408,
+      );
+    } on SocketException {
+      throw ApiException(
+        message:
+            'Cannot reach $url. Check that the backend is running and that '
+            'the address is reachable from this device.',
+        statusCode: 503,
+      );
+    } on HttpException {
+      throw ApiException(
+        message: 'HTTP error while contacting $url.',
+        statusCode: 502,
+      );
     }
   }
 

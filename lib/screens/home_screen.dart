@@ -8,6 +8,7 @@ import 'package:image_classifier/models/model_info.dart';
 import 'package:image_classifier/models/prediction.dart';
 import 'package:image_classifier/providers/prediction_provider.dart';
 import 'package:image_classifier/screens/result_screen.dart';
+import 'package:image_classifier/screens/settings_screen.dart';
 import 'package:image_classifier/services/api_client.dart';
 import 'package:image_classifier/services/image_service.dart';
 import 'package:image_classifier/widgets/drop_zone.dart';
@@ -40,6 +41,11 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Image Classifier'),
             centerTitle: true,
             actions: [
+              IconButton(
+                icon: const Icon(Icons.settings),
+                onPressed: _openSettings,
+                tooltip: 'Backend settings',
+              ),
               if (provider.state is PredictionStateResult)
                 IconButton(
                   icon: const Icon(Icons.clear),
@@ -127,7 +133,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      _showErrorSnackBar('Invalid image: $e');
+      _showRetrySnackBar('Invalid image: $e');
       setState(() {
         _selectedImage = null;
         _isFetchingModelInfo = false;
@@ -156,6 +162,9 @@ class _HomeScreenState extends State<HomeScreen> {
         );
         _isFetchingModelInfo = false;
       });
+      // The backend is unreachable — surface it now instead of letting the
+      // user hit the same failure later during classification.
+      _showErrorSnackBar('Could not load model info: ${_errorMessage(e)}');
     }
   }
 
@@ -205,7 +214,33 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openSettings() {
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const SettingsScreen()));
+  }
+
+  /// Extracts a human-readable message from an API or generic exception.
+  String _errorMessage(Object error) {
+    if (error is ApiException) return error.message;
+    return error.toString();
+  }
+
   void _showErrorSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Theme.of(context).colorScheme.error,
+        action: SnackBarAction(
+          label: 'Settings',
+          textColor: Theme.of(context).colorScheme.onError,
+          onPressed: _openSettings,
+        ),
+        duration: const Duration(seconds: 8),
+      ),
+    );
+  }
+
+  void _showRetrySnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
