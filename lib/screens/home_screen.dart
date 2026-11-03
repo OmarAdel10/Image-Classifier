@@ -98,7 +98,10 @@ class _HomeScreenState extends State<HomeScreen> {
         if (mounted) _pushResultScreen(state.response);
       });
     } else if (state is PredictionStateError) {
-      _showErrorSnackBar(state.message);
+      // Use post-frame callback to show snackbar after build completes
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showErrorSnackBar(state.message);
+      });
     } else if (state is PredictionStateIdle) {
       _navigated = false;
     }
