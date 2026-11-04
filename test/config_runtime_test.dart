@@ -5,6 +5,7 @@ import 'package:image_classifier/config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
+import 'support/false_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 
 void main() {
@@ -31,10 +32,13 @@ void main() {
     });
 
     group('platformDefaultApiBaseUrl', () {
-      test('matches the non-Android platform default', () {
-        if (Platform.isAndroid) return;
-        expect(Config.platformDefaultApiBaseUrl, 'http://localhost:8000');
-      });
+      test(
+        'matches the non-Android platform default',
+        skip: Platform.isAndroid ? 'platform default differs on Android' : null,
+        () {
+          expect(Config.platformDefaultApiBaseUrl, 'http://localhost:8000');
+        },
+      );
     });
 
     group('normalizeApiBaseUrl', () {
@@ -182,6 +186,14 @@ void main() {
         expect(Config.isValidApiBaseUrl('http://example.com:99999'), isFalse);
       });
 
+      test('accepts the highest valid port', () {
+        expect(Config.isValidApiBaseUrl('http://example.com:65535'), isTrue);
+      });
+
+      test('rejects a port one above the maximum', () {
+        expect(Config.isValidApiBaseUrl('http://example.com:65536'), isFalse);
+      });
+
       test('rejects a URL with an invalid percent escape in the host', () {
         expect(Config.isValidApiBaseUrl('http://exa%zzmple.com'), isFalse);
       });
@@ -201,6 +213,24 @@ void main() {
         expect(
           () => Config.validateStartupApiBaseUrl(compileTimeOverride: ''),
           returnsNormally,
+        );
+      });
+
+      test('validates the normalized override', () {
+        expect(
+          () => Config.validateStartupApiBaseUrl(
+            compileTimeOverride: '  http://ok.example.com:8000/  ',
+          ),
+          returnsNormally,
+        );
+      });
+
+      test('throws after normalization for an invalid override', () {
+        expect(
+          () => Config.validateStartupApiBaseUrl(
+            compileTimeOverride: '  ftp://bad/  ',
+          ),
+          throwsA(isA<StateError>()),
         );
       });
     });
@@ -240,8 +270,43 @@ void main() {
             'http://saved.example.com:9000',
             compileTimeOverride: 'http://compile.example.com:8000',
           ),
-          throwsA(isA<StateError>()),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('Refusing to store a runtime API base URL'),
+            ),
+          ),
         );
+      });
+    });
+
+    group('setApiBaseUrl when the store write reports failure', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = FalseReturningPrefsStore();
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('throws StateError with the store-failure message', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://saved.example.com:9000'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Could not store the API base URL.',
+            ),
+          ),
+        );
+      });
+
+      test('clearApiBaseUrl reports false when removal is refused', () async {
+        expect(await Config.clearApiBaseUrl(), isFalse);
       });
     });
 

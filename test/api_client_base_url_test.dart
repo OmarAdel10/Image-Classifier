@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -245,6 +246,39 @@ void main() {
 
         expect(await apiClient.healthStatusCode(), isNull);
       });
+
+      test('returns null when the client throws a ClientException', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw http.ClientException('connection closed');
+          }),
+          baseUrl: 'http://client-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when the request raises an ArgumentError', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw ArgumentError('bad request URL');
+          }),
+          baseUrl: 'http://arg-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when a filesystem-level IOException occurs', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw const FileSystemException('disk error', '/tmp/x');
+          }),
+          baseUrl: 'http://io-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
     });
 
     group('error messages include the base URL', () {
@@ -357,6 +391,113 @@ void main() {
           ),
         );
       });
+
+      test(
+        'a ClientException produces an ApiException with status 502',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw http.ClientException('connection closed');
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://client-error.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('http://client-error.example.com:8000'),
+                      contains('connection closed'),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test('an IOException produces an ApiException with status 503', () async {
+        final mockClient = MockClient((request) async {
+          throw const FileSystemException('disk error', '/tmp/x');
+        });
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://io-error.example.com:8000',
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('http://io-error.example.com:8000'),
+                )
+                .having((e) => e.statusCode, 'statusCode', 503),
+          ),
+        );
+      });
+
+      test(
+        'an ArgumentError produces an ApiException with status 502',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw ArgumentError('bad address');
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://arg-error.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('http://arg-error.example.com:8000'),
+                      contains('bad address'),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test(
+        'predictBytes names the URL when the client throws a ClientException',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw http.ClientException('connection closed');
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://bytes.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('http://bytes.example.com:8000'),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
     });
 
     group('malformed JSON responses', () {

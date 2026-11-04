@@ -103,6 +103,30 @@ void main() {
       expect(field.controller?.text, 'http://stored.example.com:1234');
     });
 
+    testWidgets('keeps text typed while the stored URL resolves', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+      });
+
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          MockClient((request) async => http.Response('{}', 200)),
+        ).widget,
+      );
+      // Do not settle first: let the user type before the storage resolve
+      // completes, exercising the non-clobber guard in _loadCurrentUrl.
+      await tester.enterText(
+        find.byType(TextField),
+        'http://typed.example.com:9000',
+      );
+      await tester.pumpAndSettle();
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, 'http://typed.example.com:9000');
+    });
+
     testWidgets('shows a validation error and disables Save for a bad URL', (
       WidgetTester tester,
     ) async {
@@ -211,12 +235,37 @@ void main() {
         find.textContaining('Pinned by --dart-define=API_BASE_URL='),
         findsOneWidget,
       );
+      expect(find.textContaining('Save is disabled'), findsOneWidget);
       // The field is pre-filled with the pinned URL it can probe but not save.
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.controller?.text, 'http://compile.example.com:8000');
 
       final saveButton = tester.widget<FilledButton>(_buttonWithLabel('Save'));
       expect(saveButton.onPressed, isNull);
+    });
+
+    testWidgets('Save does nothing while pinned', (WidgetTester tester) async {
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          MockClient((request) async => http.Response('{}', 200)),
+          compileTimeOverride: 'http://compile.example.com:8000',
+        ).widget,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000',
+      );
+      await tester.pump();
+
+      // Save is disabled while pinned; tapping must not store anything.
+      await tester.tap(_buttonWithLabel('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Saved. Using'), findsNothing);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
     });
 
     testWidgets('Save shows an error banner when storage fails', (
@@ -271,6 +320,31 @@ void main() {
       },
     );
 
+    testWidgets('Reset to Default reports failure when storage fails', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = ThrowingPrefsStore();
+      SharedPreferences.resetStatic();
+
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          MockClient((request) async => http.Response('{}', 200)),
+        ).widget,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Could not clear the stored URL'),
+        findsOneWidget,
+      );
+      // The field keeps showing the resolved default; nothing was cleared.
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, Config.platformDefaultApiBaseUrl);
+    });
+
     testWidgets(
       'Test Connection shows a failure status for an unreachable URL',
       (WidgetTester tester) async {
@@ -318,6 +392,15 @@ void main() {
         requestedUrls,
         contains('${Config.platformDefaultApiBaseUrl}/health'),
       );
+
+      // Typing a new value clears the banner about the previous one.
+      await tester.enterText(
+        find.byType(TextField),
+        'http://changed.example.com:9000',
+      );
+      await tester.pump();
+
+      expect(find.textContaining('Connected to'), findsNothing);
     });
 
     testWidgets('Test Connection probes the URL as typed', (
@@ -414,6 +497,11 @@ void main() {
           ),
           findsOneWidget,
         );
+        // The probe finished: the button is re-enabled for another attempt.
+        final probeButton = tester.widget<FilledButton>(
+          _buttonWithLabel('Test Connection'),
+        );
+        expect(probeButton.onPressed, isNotNull);
       },
     );
   });
