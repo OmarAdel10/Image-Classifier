@@ -119,18 +119,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_validate(url) != null) return;
 
     final override = widget.compileTimeOverride;
-    if (override.isNotEmpty) {
-      // Defense in depth: Save is disabled while pinned, and Config refuses
-      // the write too. Storing a value that cannot take effect would leave a
-      // dormant redirect for a later unpinned build.
-      setState(() {
-        _statusIsError = true;
-        _statusMessage =
-            'Not saved: --dart-define=API_BASE_URL=$override pins the '
-            'backend URL for this build.';
-      });
-      return;
-    }
 
     final apiClient = context.read<ApiClient>();
 
