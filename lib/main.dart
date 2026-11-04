@@ -13,7 +13,7 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   // Fail fast on a malformed API base URL (IC-60): a bad --dart-define
   // must not silently point requests at an attacker-controlled URL.
-  Config.ensureValidApiBaseUrl(Config.apiBaseUrl);
+  Config.validateStartupApiBaseUrl();
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.landscapeLeft,

@@ -133,6 +133,32 @@ flutter run -d linux \
   --dart-define=REQUEST_TIMEOUT_SEC=30
 ```
 
+#### API Base URL Resolution Order
+
+The backend address is resolved in this order:
+
+1. **Compile-time override** — `--dart-define=API_BASE_URL=...`. Always wins.
+2. **Runtime override** — set in the app via the ⚙ *Backend Settings* screen
+   (gear icon in the app bar). Persisted with `shared_preferences` and
+   ignored when a compile-time override is present.
+3. **Platform default** — depends on the target:
+   - Linux / Windows / macOS desktop → `http://localhost:8000`
+   - Android emulator → `http://10.0.2.2:8000`
+     (the emulator's `localhost` is the emulator itself, not your computer)
+
+The settings screen has a **Test Connection** button that probes `/health`
+against the typed URL before you save it, and reports the exact address it
+tried when the connection fails.
+
+#### Reaching the Backend
+
+| Where the app runs | URL to use | Backend must be started as |
+|---|---|---|
+| Linux/Windows/macOS desktop | `http://localhost:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` |
+| Android emulator | `http://10.0.2.2:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` |
+| Physical phone/tablet | `http://<your-LAN-IP>:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` |
+| Web browser | `http://<host>:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` (CORS must allow the origin) |
+
 ### Running the App
 ```bash
 flutter pub get
@@ -189,6 +215,8 @@ with open("cat.jpg", "rb") as f:
 |-------|----------|
 | `ModuleNotFoundError: cnn_classifier` | Run `pip install -e .[dev]` from `backend/` |
 | `Connection refused` | Ensure FastAPI server is running on port 8000 |
+| `Cannot reach http://...` | The address in the error is the one that failed. Open ⚙ *Backend Settings* → **Test Connection**. On Android use `http://10.0.2.2:8000`; on a physical device use your computer's LAN IP. |
+| `Network error` / `Request timed out` | The backend is unreachable at the configured address, or it is bound to `127.0.0.1` instead of `0.0.0.0` (required for emulator/device access). |
 | `File too large` | Max upload size is 10MB (configurable via `--dart-define`) |
 | `Model unavailable` | Ensure `backend/checkpoints/best_model.pt` exists |
 | Flutter build fails | Run `flutter clean && flutter pub get` |
