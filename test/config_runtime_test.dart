@@ -386,11 +386,23 @@ void main() {
       test('throws ArgumentError for an invalid URL', () async {
         await expectLater(
           Config.setApiBaseUrl('not a url'),
-          throwsA(isA<ArgumentError>()),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('must be a well-formed http/https URL'),
+            ),
+          ),
         );
         await expectLater(
           Config.setApiBaseUrl('ftp://x'),
-          throwsA(isA<ArgumentError>()),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('must be a well-formed http/https URL'),
+            ),
+          ),
         );
       });
 
