@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_classifier/config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
+
+import 'support/throwing_prefs_store.dart';
 
 void main() {
   group('Config runtime API base URL', () {
@@ -11,10 +14,49 @@ void main() {
       SharedPreferences.setMockInitialValues({});
     });
 
+    group('platformDefaultApiBaseUrlFor', () {
+      test('uses the Android emulator host loopback for Android', () {
+        expect(
+          Config.platformDefaultApiBaseUrlFor(isAndroid: true),
+          'http://10.0.2.2:8000',
+        );
+      });
+
+      test('uses localhost on non-Android platforms', () {
+        expect(
+          Config.platformDefaultApiBaseUrlFor(isAndroid: false),
+          'http://localhost:8000',
+        );
+      });
+    });
+
     group('platformDefaultApiBaseUrl', () {
       test('is http://localhost:8000 on Linux', () {
         expect(Platform.isLinux, isTrue);
         expect(Config.platformDefaultApiBaseUrl, 'http://localhost:8000');
+      });
+    });
+
+    group('normalizeApiBaseUrl', () {
+      test('trims whitespace and strips trailing slashes', () {
+        expect(
+          Config.normalizeApiBaseUrl('  http://host:8000/  '),
+          'http://host:8000',
+        );
+      });
+
+      test('strips multiple trailing slashes', () {
+        expect(
+          Config.normalizeApiBaseUrl('http://host:8000///'),
+          'http://host:8000',
+        );
+      });
+
+      test('leaves a URL without a trailing slash unchanged', () {
+        expect(
+          Config.normalizeApiBaseUrl('http://host:8000'),
+          'http://host:8000',
+        );
       });
     });
 
@@ -25,15 +67,23 @@ void main() {
         expect(Config.apiBaseUrl, 'http://localhost:8000');
       });
 
-      test('honours the compile-time override over the platform default', () {
-        // The compile-time value is a `const` and cannot be changed at
-        // runtime, so assert the documented priority relationship:
-        // compile-time override when non-empty, platform default otherwise.
+      test('effectiveApiBaseUrl uses a non-empty override, normalized', () {
         expect(
-          Config.apiBaseUrl,
-          Config.compileTimeApiBaseUrl.isNotEmpty
-              ? Config.compileTimeApiBaseUrl
-              : Config.platformDefaultApiBaseUrl,
+          Config.effectiveApiBaseUrl(
+            compileTimeOverride: '  http://compile.example.com:8000/  ',
+          ),
+          'http://compile.example.com:8000',
+        );
+      });
+
+      test('effectiveApiBaseUrl falls back to the platform default', () {
+        expect(
+          Config.effectiveApiBaseUrl(compileTimeOverride: ''),
+          Config.platformDefaultApiBaseUrl,
+        );
+        expect(
+          Config.effectiveApiBaseUrl(compileTimeOverride: ''),
+          'http://localhost:8000',
         );
       });
 
@@ -81,6 +131,91 @@ void main() {
           );
         },
       );
+
+      test('compile-time override wins over a stored override', () async {
+        SharedPreferences.setMockInitialValues({
+          Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+        });
+
+        expect(
+          await Config.resolveApiBaseUrl(
+            compileTimeOverride: 'http://compile.example.com:8000',
+          ),
+          'http://compile.example.com:8000',
+        );
+      });
+
+      test('ignores a stored value that is not a valid base URL', () async {
+        SharedPreferences.setMockInitialValues({
+          Config.apiBaseUrlPrefsKey: 'ftp://bad',
+        });
+
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
+    group('isValidApiBaseUrl', () {
+      test('rejects a URL with embedded credentials', () {
+        expect(
+          Config.isValidApiBaseUrl('http://user:pass@example.com'),
+          isFalse,
+        );
+      });
+
+      test('accepts a well-formed http URL', () {
+        expect(Config.isValidApiBaseUrl('http://example.com'), isTrue);
+      });
+    });
+
+    group('validateStartupApiBaseUrl', () {
+      test('throws StateError for a non-empty invalid override', () {
+        expect(
+          () => Config.validateStartupApiBaseUrl(
+            compileTimeOverride: 'ftp://bad',
+          ),
+          throwsA(isA<StateError>()),
+        );
+      });
+
+      test('does nothing for an empty override', () {
+        expect(
+          () => Config.validateStartupApiBaseUrl(compileTimeOverride: ''),
+          returnsNormally,
+        );
+      });
+    });
+
+    group('storage failures', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = ThrowingPrefsStore();
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('resolveApiBaseUrl falls back to the platform default', () async {
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+
+      test('clearApiBaseUrl does not throw', () async {
+        await expectLater(Config.clearApiBaseUrl(), completes);
+      });
+
+      test('setApiBaseUrl throws StateError', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://saved.example.com:9000'),
+          throwsA(isA<StateError>()),
+        );
+      });
     });
 
     group('setApiBaseUrl', () {

@@ -28,6 +28,7 @@ class _HomeScreenState extends State<HomeScreen> {
   ModelInfo? _modelInfo;
   bool _navigated = false;
   bool _isFetchingModelInfo = false;
+  String? _lastShownError;
 
   @override
   Widget build(BuildContext context) {
@@ -97,16 +98,25 @@ class _HomeScreenState extends State<HomeScreen> {
   void _handleProviderState(PredictionProvider provider) {
     final state = provider.state;
 
+    if (state is PredictionStateError) {
+      // A rebuild while the same error is still active must not queue a
+      // duplicate snackbar; only a new message is worth showing again.
+      if (state.message == _lastShownError) return;
+      _lastShownError = state.message;
+      // Use post-frame callback to show snackbar after build completes
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showErrorSnackBar(state.message);
+      });
+      return;
+    }
+
+    _lastShownError = null;
+
     if (state is PredictionStateResult && !_navigated) {
       _navigated = true;
       // Use post-frame callback to navigate after build completes
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _pushResultScreen(state.response);
-      });
-    } else if (state is PredictionStateError) {
-      // Use post-frame callback to show snackbar after build completes
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _showErrorSnackBar(state.message);
       });
     } else if (state is PredictionStateIdle) {
       _navigated = false;
@@ -133,7 +143,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      _showRetrySnackBar('Invalid image: $e');
+      _showImageErrorSnackBar('Invalid image: $e');
       setState(() {
         _selectedImage = null;
         _isFetchingModelInfo = false;
@@ -240,20 +250,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  void _showRetrySnackBar(String message) {
+  void _showImageErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: Theme.of(context).colorScheme.error,
-        action: SnackBarAction(
-          label: 'Retry',
-          textColor: Theme.of(context).colorScheme.onError,
-          onPressed: () {
-            if (_selectedImage != null) {
-              _onClassify();
-            }
-          },
-        ),
       ),
     );
   }

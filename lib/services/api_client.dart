@@ -45,7 +45,7 @@ class ApiClient {
   /// override stored by the settings screen.
   Future<String> get baseUrl async {
     final explicit = _explicitBaseUrl;
-    if (explicit != null) return explicit;
+    if (explicit != null) return Config.normalizeApiBaseUrl(explicit);
     final cached = _resolvedBaseUrl;
     if (cached != null) return cached;
     final resolved = await Config.resolveApiBaseUrl();
@@ -63,20 +63,30 @@ class ApiClient {
 
   /// Checks if the backend is healthy.
   Future<bool> healthCheck() async {
+    final statusCode = await healthStatusCode();
+    return statusCode == 200;
+  }
+
+  /// Returns the HTTP status code from `/health`, or null when the backend
+  /// cannot be reached.
+  ///
+  /// Unlike [healthCheck], this lets callers distinguish a reachable but
+  /// unhealthy backend (non-200) from an unreachable one (null).
+  Future<int?> healthStatusCode() async {
     final url = await baseUrl;
     try {
       final response = await client
           .get(Uri.parse('$url/health'))
           .timeout(_timeout);
-      return response.statusCode == 200;
+      return response.statusCode;
     } on TimeoutException {
-      return false;
+      return null;
     } on SocketException {
-      return false;
+      return null;
     } on HttpException {
-      return false;
+      return null;
     } on FormatException {
-      return false;
+      return null;
     }
   }
 
@@ -182,6 +192,11 @@ class ApiClient {
     } on HttpException {
       throw ApiException(
         message: 'HTTP error while contacting $url.',
+        statusCode: 502,
+      );
+    } on FormatException catch (e) {
+      throw ApiException(
+        message: 'Invalid response from $url: ${e.message}',
         statusCode: 502,
       );
     }

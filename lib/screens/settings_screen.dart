@@ -9,7 +9,16 @@ import 'package:image_classifier/services/api_client.dart';
 /// The compile-time `--dart-define=API_BASE_URL` override always wins; the
 /// value entered here is used only when no compile-time override is present.
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({
+    super.key,
+    this.compileTimeOverride = Config.compileTimeApiBaseUrl,
+  });
+
+  /// Compile-time `--dart-define=API_BASE_URL` value in effect for this app.
+  ///
+  /// Defaults to [Config.compileTimeApiBaseUrl]; tests inject a value to
+  /// verify that the screen warns when the runtime value is overridden.
+  final String compileTimeOverride;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -35,7 +44,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadCurrentUrl() async {
-    final url = await Config.resolveApiBaseUrl();
+    final url = await Config.resolveApiBaseUrl(
+      compileTimeOverride: widget.compileTimeOverride,
+    );
     if (!mounted) return;
     _controller.text = url;
     setState(() {});
@@ -53,7 +64,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _testConnection() async {
     final url = _controller.text.trim();
-    if (_validate(url) != null) return;
 
     setState(() {
       _testing = true;
@@ -66,32 +76,56 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     // Probe the URL as typed, without disturbing the stored configuration.
     final probe = ApiClient(client: httpClient, baseUrl: url);
-    final healthy = await probe.healthCheck();
+    final statusCode = await probe.healthStatusCode();
 
     if (!mounted) return;
     setState(() {
       _testing = false;
-      _statusIsError = !healthy;
-      _statusMessage = healthy
-          ? 'Connected to $url'
-          : 'Could not reach $url — is the backend running?';
+      if (statusCode == 200) {
+        _statusIsError = false;
+        _statusMessage = 'Connected to $url';
+      } else if (statusCode != null) {
+        _statusIsError = true;
+        _statusMessage =
+            'Reached $url, but /health returned HTTP $statusCode. '
+            'The backend is running but not healthy.';
+      } else {
+        _statusIsError = true;
+        _statusMessage = 'Could not reach $url — is the backend running?';
+      }
     });
   }
 
   Future<void> _save() async {
-    final url = _controller.text.trim();
+    final url = Config.normalizeApiBaseUrl(_controller.text);
     if (_validate(url) != null) return;
 
     final apiClient = context.read<ApiClient>();
 
-    // `_validate` already rejected anything `Config.setApiBaseUrl` would
-    // refuse, so the URL is known-good here.
-    await Config.setApiBaseUrl(url);
+    try {
+      await Config.setApiBaseUrl(url);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _statusIsError = true;
+        _statusMessage = 'Could not save $url: $e';
+      });
+      return;
+    }
+
     apiClient.invalidateBaseUrlCache();
     if (!mounted) return;
     setState(() {
-      _statusIsError = false;
-      _statusMessage = 'Saved. Using $url';
+      final override = widget.compileTimeOverride;
+      if (override.isNotEmpty) {
+        _statusIsError = true;
+        _statusMessage =
+            'Stored $url, but --dart-define=API_BASE_URL=$override '
+            'overrides it at runtime.';
+      } else {
+        _statusIsError = false;
+        _statusMessage = 'Saved. Using $url';
+      }
     });
   }
 
@@ -100,11 +134,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     await Config.clearApiBaseUrl();
     apiClient.invalidateBaseUrlCache();
-    final url = await Config.resolveApiBaseUrl();
+    final url = await Config.resolveApiBaseUrl(
+      compileTimeOverride: widget.compileTimeOverride,
+    );
     if (!mounted) return;
     setState(() {
+      final override = widget.compileTimeOverride;
       _statusIsError = false;
-      _statusMessage = 'Reset to default ($url)';
+      _statusMessage = override.isNotEmpty
+          ? 'Cleared the stored URL; --dart-define=API_BASE_URL=$override '
+                'still applies.'
+          : 'Reset to default ($url)';
     });
     _controller.text = url;
   }
@@ -146,7 +186,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             runSpacing: 12,
             children: [
               FilledButton.icon(
-                onPressed: _testing ? null : _testConnection,
+                onPressed: (_testing || errorText != null)
+                    ? null
+                    : _testConnection,
                 icon: _testing
                     ? const SizedBox(
                         width: 16,

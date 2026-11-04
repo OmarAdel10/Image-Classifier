@@ -8,6 +8,33 @@ import 'package:image_classifier/config.dart';
 import 'package:image_classifier/services/api_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+File _createTempImageFile() {
+  final tempDir = Directory.systemTemp.createTempSync('api_client_base_url_');
+  final file = File('${tempDir.path}/test_image.png');
+  // Minimal valid 1x1 PNG.
+  file.writeAsBytesSync([
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+    0x00, 0x00, 0x00, 0x0D, // IHDR chunk length
+    0x49, 0x48, 0x44, 0x52, // IHDR
+    0x00, 0x00, 0x00, 0x01, // width: 1
+    0x00, 0x00, 0x00, 0x01, // height: 1
+    0x08,
+    0x02,
+    0x00,
+    0x00,
+    0x00, // bit depth, color type, compression, filter, interlace
+    0x90, 0x77, 0x53, 0xDE, // CRC
+    0x00, 0x00, 0x00, 0x0C, // IDAT chunk length
+    0x49, 0x44, 0x41, 0x54, // IDAT
+    0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00,
+    0x18, 0xDD, 0x8D, 0xB4, // compressed data + CRC
+    0x00, 0x00, 0x00, 0x00, // IEND chunk length
+    0x49, 0x45, 0x4E, 0x44, // IEND
+    0xAE, 0x42, 0x60, 0x82, // CRC
+  ]);
+  return file;
+}
+
 void main() {
   group('ApiClient base URL', () {
     setUp(() {
@@ -57,6 +84,22 @@ void main() {
         );
 
         expect(await apiClient.baseUrl, 'http://explicit.example.com:9000');
+      });
+
+      test('trailing slashes are stripped before paths are appended', () async {
+        final requestedUrls = <String>[];
+        final mockClient = MockClient((request) async {
+          requestedUrls.add(request.url.toString());
+          return http.Response('{"status": "ok"}', 200);
+        });
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://host:8000/',
+        );
+
+        expect(await apiClient.baseUrl, 'http://host:8000');
+        expect(await apiClient.healthCheck(), isTrue);
+        expect(requestedUrls.single, 'http://host:8000/health');
       });
     });
 
@@ -157,6 +200,53 @@ void main() {
       );
     });
 
+    group('healthStatusCode', () {
+      test('returns 200 for a healthy backend', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            expect(request.url.toString(), endsWith('/health'));
+            return http.Response('{"status": "ok"}', 200);
+          }),
+          baseUrl: 'http://healthy.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), 200);
+      });
+
+      test('returns the status code when reachable but unhealthy', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async => http.Response('{}', 500)),
+          baseUrl: 'http://unhealthy.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), 500);
+      });
+
+      test('returns null when the socket fails', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw SocketException('Connection refused');
+          }),
+          baseUrl: 'http://unreachable.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when the request times out', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            await Future.delayed(const Duration(milliseconds: 200));
+            return http.Response('{}', 200);
+          }),
+          baseUrl: 'http://slow.example.com:8000',
+          timeout: const Duration(milliseconds: 50),
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+    });
+
     group('error messages include the base URL', () {
       test(
         'a SocketException produces an ApiException naming the URL',
@@ -179,6 +269,32 @@ void main() {
                     contains('http://socket.example.com:8000'),
                   )
                   .having((e) => e.statusCode, 'statusCode', 503),
+            ),
+          );
+        },
+      );
+
+      test(
+        'an HttpException produces an ApiException with status 502',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw const HttpException('connection closed');
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://http-error.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('http://http-error.example.com:8000'),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
             ),
           );
         },
@@ -214,6 +330,73 @@ void main() {
                   .having((e) => e.statusCode, 'statusCode', 408),
             ),
           );
+        },
+      );
+
+      test('predict names the URL when the socket fails', () async {
+        final file = _createTempImageFile();
+        final mockClient = MockClient((request) async {
+          throw SocketException('Connection refused');
+        });
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://predict.example.com:8000',
+          timeout: const Duration(milliseconds: 100),
+        );
+
+        await expectLater(
+          apiClient.predict(file),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('http://predict.example.com:8000'),
+                )
+                .having((e) => e.statusCode, 'statusCode', 503),
+          ),
+        );
+      });
+    });
+
+    group('malformed JSON responses', () {
+      Future<void> expectInvalidJsonResponse(String body) async {
+        final mockClient = MockClient(
+          (request) async => http.Response(body, 200),
+        );
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://bad-json.example.com:8000',
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Invalid response from'),
+                    contains('http://bad-json.example.com:8000'),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 502),
+          ),
+        );
+      }
+
+      test(
+        'a non-JSON body produces an ApiException with status 502',
+        () async {
+          await expectInvalidJsonResponse('not json');
+        },
+      );
+
+      test(
+        'a JSON array body produces an ApiException with status 502',
+        () async {
+          await expectInvalidJsonResponse('[1,2]');
         },
       );
     });
