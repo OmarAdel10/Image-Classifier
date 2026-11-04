@@ -147,21 +147,23 @@ class Config {
   ///
   /// Requires scheme http/https, a non-empty host, a port in 1-65535, no
   /// embedded credentials, no query or fragment, and no whitespace or
-  /// percent-encoded characters in the host. Guards against URL injection
-  /// via a malformed `--dart-define=API_BASE_URL=...` (IC-60) and against
-  /// base URLs that would break path appending (`$url/health`).
+  /// percent-encoded characters anywhere in the URL. Guards against URL
+  /// injection via a malformed `--dart-define=API_BASE_URL=...` (IC-60) and
+  /// against base URLs that would break path appending (`$url/health`).
   static bool isValidApiBaseUrl(String url) {
     final trimmed = url.trim();
     if (trimmed.isEmpty || RegExp(r'\s').hasMatch(trimmed)) return false;
+    // Percent-encoding is rejected anywhere, not just in the host: the base
+    // URL is concatenated with '/health' and '/predict', so an encoded
+    // segment in the path could resolve to a different effective path than
+    // the one that was reviewed.
+    if (trimmed.contains('%')) return false;
     final uri = Uri.tryParse(trimmed);
     if (uri == null) return false;
     if (uri.scheme != 'http' && uri.scheme != 'https') return false;
     if (uri.host.isEmpty || uri.userInfo.isNotEmpty) return false;
     if (uri.hasQuery || uri.hasFragment) return false;
     if (uri.port < 1 || uri.port > 65535) return false;
-    if (uri.host.contains('%') || RegExp(r'\s').hasMatch(uri.host)) {
-      return false;
-    }
     return true;
   }
 
