@@ -92,13 +92,21 @@ class Config {
   /// [StateError] when the store refuses the write or when
   /// [compileTimeOverride] pins the build: a value that cannot take effect
   /// now would be a dormant redirect for a later unpinned build.
-  /// Pass `null`, an empty string, or whitespace to clear the override.
+  /// Pass `null`, an empty string, or whitespace to clear the override. The
+  /// clear path runs before the pinned check, so a pinned build may still
+  /// remove a stored override; it can never create one.
   static Future<void> setApiBaseUrl(
     String? url, {
     String compileTimeOverride = compileTimeApiBaseUrl,
   }) async {
     if (url == null || url.trim().isEmpty) {
-      await clearApiBaseUrl();
+      // Clearing is allowed even in a pinned build: a stored override can
+      // never take effect there, so removing it cannot become a dormant
+      // redirect. A refused removal is reported instead of being swallowed,
+      // so callers never claim a reset that did not happen.
+      if (!await clearApiBaseUrl()) {
+        throw StateError('Could not clear the stored API base URL.');
+      }
       return;
     }
     if (compileTimeOverride.isNotEmpty) {
