@@ -17,7 +17,7 @@ jobs:
   python-backend:
     name: Python Backend CI
     runs-on: ubuntu-24.04
-    timeout-minutes: 45  # first run downloads CIFAR-10 (~170MB); cached runs ~5 min
+    timeout-minutes: 120  # first run downloads CIFAR-10 (~170MB); cached runs ~5 min
     permissions:
       contents: read
     steps:
@@ -45,8 +45,9 @@ jobs:
         working-directory: backend
         run: black --check src/ tests/ scripts/ conftest.py
 
-      - name: Cache CIFAR-10 dataset
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      - name: Restore CIFAR-10 dataset cache
+        id: cifar-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /home/runner/.cache/cnn-cifar10
           key: cifar10-python-md5-c58f3010
@@ -54,27 +55,58 @@ jobs:
 
       - name: Download and verify CIFAR-10 (self-healing cache)
         run: |
+          set -euo pipefail
           mkdir -p /home/runner/.cache/cnn-cifar10
           cd /home/runner/.cache/cnn-cifar10
-          # Self-heal: purge a corrupt or partial archive instead of
-          # failing forever on an immutable cache key. Purge on EITHER
-          # hash mismatch (md5 or sha256).
-          if [ ! -f cifar-10-python.tar.gz ] \
-             || ! md5sum -c <<< 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' \
-             || ! sha256sum -c <<< '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz'; then
+          MD5=c58f30108f718f92721af3b95e74349a
+          SHA256=6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce
+          verify() {
+            [ -f cifar-10-python.tar.gz ] \
+              && echo "$MD5  cifar-10-python.tar.gz" | md5sum -c --status \
+              && echo "$SHA256  cifar-10-python.tar.gz" | sha256sum -c --status
+          }
+          if verify; then
+            echo "CIFAR-10 archive verified from the restored cache."
+          else
             rm -f cifar-10-python.tar.gz
-            # Each attempt is capped at 10 min of wall clock: wget --timeout
-            # only bounds per-read stalls, so a throttled transfer can
-            # otherwise hang for the whole job (observed 37m+). -c resumes
-            # the partial archive across attempts instead of restarting from
-            # byte 0; the md5/sha256 checks below fail the step if the
-            # archive is still incomplete after 3 attempts.
-            for attempt in 1 2 3; do
-              timeout 600 wget -c -q --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz && break
+            # The cs.toronto.edu origin is throttled to ~80 KB/s, so the
+            # 170 MB archive cannot finish inside a 30 min budget
+            # (observed: 31 min of download, then a checksum mismatch).
+            # The Wayback 'id_' snapshot serves the identical bytes ~6x
+            # faster. Both sources are verified against the pinned
+            # md5/sha256 below, so an altered mirror cannot pass.
+            for url in \
+              'https://web.archive.org/web/2020id_/https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz' \
+              'https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'; do
+              echo "Downloading CIFAR-10 from $url"
+              for attempt in 1 2; do
+                timeout 1500 curl -fL -C - --retry 3 --retry-all-errors \
+                  --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
+                  -o cifar-10-python.tar.gz "$url" || true
+                if verify; then
+                  break 2
+                fi
+                rm -f cifar-10-python.tar.gz
+              done
             done
+          fi
+          if ! verify; then
+            echo "::error::CIFAR-10 archive could not be downloaded and verified."
+            exit 1
           fi
           echo 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' | md5sum -c -
           echo '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz' | sha256sum -c -
+
+      - name: Save verified CIFAR-10 dataset cache
+        # Only a hash-verified archive is ever cached. Saving a partial
+        # download under the immutable key poisoned every later run that
+        # restored it (self-sustaining failure loop).
+        if: steps.cifar-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: /home/runner/.cache/cnn-cifar10
+          key: cifar10-python-md5-c58f3010
 
       - name: Cache pretrained model weights
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
