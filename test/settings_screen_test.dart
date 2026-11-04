@@ -244,7 +244,13 @@ void main() {
       expect(saveButton.onPressed, isNull);
     });
 
-    testWidgets('Save does nothing while pinned', (WidgetTester tester) async {
+    testWidgets('Reset to Default clears the stored URL while pinned', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+      });
+
       await tester.pumpWidget(
         _buildSettingsScreen(
           MockClient((request) async => http.Response('{}', 200)),
@@ -253,20 +259,66 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byType(TextField),
-        'http://saved.example.com:9000',
-      );
-      await tester.pump();
-
-      // Save is disabled while pinned; tapping must not store anything.
-      await tester.tap(_buttonWithLabel('Save'));
+      // Reset stays enabled while pinned: removing a stored override is
+      // always safe, because it can never take effect in this build.
+      await tester.tap(_buttonWithLabel('Reset to Default'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('Saved. Using'), findsNothing);
+      expect(
+        find.textContaining(
+          'Cleared the stored URL; --dart-define=API_BASE_URL=',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('http://compile.example.com:8000'),
+        findsWidgets,
+      );
+
+      // The stored override is gone: the field shows the pinned URL and the
+      // platform default resolves again once the pin is removed.
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, 'http://compile.example.com:8000');
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+      expect(
+        await Config.resolveApiBaseUrl(),
+        Config.platformDefaultApiBaseUrl,
+      );
     });
+
+    testWidgets(
+      'Save is disabled while pinned and stores nothing when tapped',
+      (WidgetTester tester) async {
+        await tester.pumpWidget(
+          _buildSettingsScreen(
+            MockClient((request) async => http.Response('{}', 200)),
+            compileTimeOverride: 'http://compile.example.com:8000',
+          ).widget,
+        );
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byType(TextField),
+          'http://saved.example.com:9000',
+        );
+        await tester.pump();
+
+        // Observable contract of the pinned build: the Save button is
+        // disabled, so tapping it stores nothing and reports no success.
+        final saveButton = tester.widget<FilledButton>(
+          _buttonWithLabel('Save'),
+        );
+        expect(saveButton.onPressed, isNull);
+
+        await tester.tap(_buttonWithLabel('Save'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('Saved. Using'), findsNothing);
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+      },
+    );
 
     testWidgets('Save shows an error banner when storage fails', (
       WidgetTester tester,
@@ -450,32 +502,35 @@ void main() {
       expect(find.textContaining('HTTP 500'), findsOneWidget);
     });
 
-    testWidgets('Test Connection survives a client exception while probing', (
-      WidgetTester tester,
-    ) async {
-      final mockClient = MockClient((request) async {
-        throw http.ClientException('connection closed');
-      });
+    testWidgets(
+      'Test Connection reports an unreachable backend for a client exception',
+      (WidgetTester tester) async {
+        final mockClient = MockClient((request) async {
+          throw http.ClientException('connection closed');
+        });
 
-      await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
-      await tester.pumpAndSettle();
+        await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+        await tester.pumpAndSettle();
 
-      await tester.tap(_buttonWithLabel('Test Connection'));
-      await tester.pump();
-      await tester.pumpAndSettle();
+        await tester.tap(_buttonWithLabel('Test Connection'));
+        await tester.pump();
+        await tester.pumpAndSettle();
 
-      expect(
-        find.textContaining(
-          'Could not reach ${Config.platformDefaultApiBaseUrl}',
-        ),
-        findsOneWidget,
-      );
-      // The probe finished: the button is re-enabled for another attempt.
-      final probeButton = tester.widget<FilledButton>(
-        _buttonWithLabel('Test Connection'),
-      );
-      expect(probeButton.onPressed, isNotNull);
-    });
+        // A ClientException is swallowed by healthStatusCode (it reports no
+        // status code), so the probe reports the backend as unreachable.
+        expect(
+          find.textContaining(
+            'Could not reach ${Config.platformDefaultApiBaseUrl}',
+          ),
+          findsOneWidget,
+        );
+        // The probe finished: the button is re-enabled for another attempt.
+        final probeButton = tester.widget<FilledButton>(
+          _buttonWithLabel('Test Connection'),
+        );
+        expect(probeButton.onPressed, isNotNull);
+      },
+    );
 
     testWidgets(
       'Test Connection reports unexpected probe failures without crashing',

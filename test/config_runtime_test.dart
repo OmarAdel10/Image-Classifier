@@ -205,6 +205,14 @@ void main() {
       test('rejects a whitespace-only URL', () {
         expect(Config.isValidApiBaseUrl('   '), isFalse);
       });
+
+      test('rejects a URL whose port is not a number', () {
+        expect(Config.isValidApiBaseUrl('http://host:notaport'), isFalse);
+      });
+
+      test('rejects a URL with port 0', () {
+        expect(Config.isValidApiBaseUrl('http://example.com:0'), isFalse);
+      });
     });
 
     group('validateStartupApiBaseUrl', () {
@@ -268,7 +276,13 @@ void main() {
       test('setApiBaseUrl throws StateError', () async {
         await expectLater(
           Config.setApiBaseUrl('http://saved.example.com:9000'),
-          throwsA(isA<StateError>()),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              isNot(contains('Refusing to store a runtime API base URL')),
+            ),
+          ),
         );
       });
 
@@ -315,6 +329,19 @@ void main() {
 
       test('clearApiBaseUrl reports false when removal is refused', () async {
         expect(await Config.clearApiBaseUrl(), isFalse);
+      });
+
+      test('setApiBaseUrl(null) reports a refused removal', () async {
+        await expectLater(
+          Config.setApiBaseUrl(null),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Could not clear the stored API base URL.',
+            ),
+          ),
+        );
       });
     });
 
@@ -393,6 +420,24 @@ void main() {
         await Config.setApiBaseUrl('http://saved.example.com:9000');
         await Config.setApiBaseUrl('');
 
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+
+      test('null clears the override even in a pinned build', () async {
+        await Config.setApiBaseUrl('http://saved.example.com:9000');
+
+        // The clear path runs before the pinned check: a pinned build can
+        // never create a runtime override, so removing one is always safe.
+        await Config.setApiBaseUrl(
+          null,
+          compileTimeOverride: 'http://compile.example.com:8000',
+        );
+
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
         expect(
           await Config.resolveApiBaseUrl(),
           Config.platformDefaultApiBaseUrl,
