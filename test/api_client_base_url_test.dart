@@ -544,7 +544,33 @@ void main() {
       test(
         'a 200 whose classes field is not a list produces an ApiException 502',
         () async {
-          await expectInvalidJsonResponse('{"classes": "not-a-list"}');
+          // Dedicated (non-helper) assertion: pins the TypeError-specific
+          // message so this test fails if the `on TypeError` catch is
+          // removed and the FormatException path silently takes over.
+          final mockClient = MockClient(
+            (request) async => http.Response('{"classes": "not-a-list"}', 200),
+          );
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://bad-json.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Invalid response from'),
+                      contains('unexpected response shape'),
+                      contains('http://bad-json.example.com:8000'),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
         },
       );
     });

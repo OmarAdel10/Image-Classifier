@@ -197,6 +197,14 @@ void main() {
       test('rejects a URL with an invalid percent escape in the host', () {
         expect(Config.isValidApiBaseUrl('http://exa%zzmple.com'), isFalse);
       });
+
+      test('rejects an empty URL', () {
+        expect(Config.isValidApiBaseUrl(''), isFalse);
+      });
+
+      test('rejects a whitespace-only URL', () {
+        expect(Config.isValidApiBaseUrl('   '), isFalse);
+      });
     });
 
     group('validateStartupApiBaseUrl', () {

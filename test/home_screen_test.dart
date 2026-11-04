@@ -299,5 +299,60 @@ void main() {
 
       expect(find.byType(SnackBar), findsNothing);
     });
+
+    testWidgets('replaces a different prediction error instead of queueing', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      var predictCalls = 0;
+      final mockClient = MockClient((request) async {
+        if (request.url.path == '/model-info') {
+          return http.Response(
+            '{"model": "cnn_scratch", "classes": ["cat", "dog"]}',
+            200,
+          );
+        }
+        if (predictCalls == 0) {
+          predictCalls++;
+          throw const SocketException('first failure');
+        }
+        throw const HttpException('second failure');
+      });
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: mockClient,
+          imageService: MockImageService(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final provider = tester
+          .element(find.byType(HomeScreen))
+          .read<PredictionProvider>();
+      final image = XFile(imageFile.path);
+
+      await tester.runAsync(() async {
+        await provider.predict(image);
+      });
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cannot reach'), findsOneWidget);
+      expect(find.byType(SnackBar), findsOneWidget);
+
+      // A second, different error must REPLACE the first snackbar
+      // (hideCurrentSnackBar), not queue behind it.
+      await tester.runAsync(() async {
+        await provider.predict(image);
+      });
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('HTTP error while contacting'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Cannot reach'), findsNothing);
+      expect(find.byType(SnackBar), findsOneWidget);
+    });
   });
 }

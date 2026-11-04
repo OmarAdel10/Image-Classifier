@@ -67,5 +67,18 @@ void main() {
         throwsA(isA<StateError>()),
       );
     });
+
+    test('the error message never echoes a credential-bearing URL', () {
+      expect(
+        () => Config.ensureValidApiBaseUrl('http://user:pass@example.com'),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            isNot(contains('user:pass')),
+          ),
+        ),
+      );
+    });
   });
 }
