@@ -33,6 +33,86 @@ matching Plane work item.
 - **Fix:** Simplify to `$e`, or wire the arm if `healthStatusCode` ever starts
   throwing `ApiException`.
 
+## ERROR-BODY — _parseErrorMessage reports the raw body, not the status code
+
+- **Plane:** IC-68
+- **Location:** `lib/services/api_client.dart:260`
+- **Finding:** The backend error body is shown verbatim to the user instead of the
+  HTTP status code, so a proxy or HTML error page leaks through the message.
+- **Fix:** Report the response status code and keep the body only for structured
+  JSON error payloads.
+
+## CI-DEDUP — duplicated Flutter CI workflows with divergent torch cache keys
+
+- **Plane:** IC-69
+- **Location:** `.github/workflows/backend-ci.yml:86`,
+  `.github/workflows/image-classifier-ci.yml:124`
+- **Finding:** `backend-ci.yml` keys the torch weight cache on
+  `torch-pretrained-tv-0.29.1-sha256-<cifar sha256>` and runs a
+  `Verify torch cache integrity` step, while `image-classifier-ci.yml` uses the
+  bare key `torch-pretrained-tv-0.29.1` and has no verification step, so the two
+  workflows cache different weights and only one of them is integrity-checked.
+- **Fix:** Merge the two workflows into one, or give both the same verified key.
+
+## FLAKY-HOME — flaky home_screen snackbar test
+
+- **Plane:** IC-71
+- **Location:** `test/home_screen_test.dart:200`
+- **Finding:** The `prediction errors offer a Settings action that navigates`
+  test was observed to fail intermittently: the Settings-action SnackBar is
+  queued from an async error path, so the widget lookup can run before the
+  snackbar is mounted.
+- **Fix:** Synchronise the test with the snackbar queue instead of relying on
+  the current pump timing.
+
+## CI-CIFAR-POISON — Backend CI CIFAR-10 cache poisoning
+
+- **Plane:** IC-74
+- **Location:** `.github/workflows/backend-ci.yml:48-80`
+- **Finding:** The failed job re-saved a truncated archive under the same
+  immutable cache key, so every later run kept failing on its own poisoned
+  cache entry.
+- **Fix:** **Delivered by PR #30** — split `actions/cache` into `restore` + a
+  hash-gated `save`, version the key, and download through
+  `backend/scripts/fetch_cifar10.sh`.
+
+## CI-CACHE-KEY — one shared CIFAR cache key, immutable v2 key, unpinned capture
+
+- **Plane:** IC-76
+- **Location:** `.github/workflows/backend-ci.yml:76-80`,
+  `.github/workflows/image-classifier-ci.yml:114-118`
+- **Finding:** (1) Both workflows save the same key on the same ref, so the
+  second one hits a reservation race and re-downloads 162 MB; (2) the `v2` key
+  is immutable, so a future corruption can never be repaired in place; (3) the
+  mirror selector `web/2020id_/` is a closest-capture selector rather than a
+  pinned capture id.
+- **Fix:** Use one cache key per workflow, allow the save step to write a
+  repair key, and pin the archive.org capture id.
+
+## API-MESSAGES — misleading exception messages and an unreachable port bound
+
+- **Plane:** IC-77
+- **Location:** `lib/services/api_client.dart:214`,
+  `lib/services/api_client.dart:226`, `lib/config.dart:166`
+- **Finding:** A `Uri.parse` `FormatException` is reported as
+  `Invalid response from ...` although it is a request-construction error, a
+  `MultipartFile.fromPath` `ArgumentError` is reported as
+  `Invalid backend address ...` although the file is missing, and
+  `${e.message}` can render `null`. `uri.port > 65535` is unreachable because
+  the URI parser rejects such a port first.
+- **Fix:** Map each exception to the message that describes its real cause and
+  drop the unreachable port check.
+
+## README-PINNED — stale pinned-build documentation
+
+- **Plane:** IC-78
+- **Location:** `README.md:140`, `docs/followups.md` (SETTINGS-DEAD-BRANCH)
+- **Finding:** The README still says the runtime override is ignored when a
+  compile-time override is present, but a pinned build can no longer create one
+  (Save is disabled and `Config` throws), and the `SETTINGS-DEAD-BRANCH` entry
+  still describes the old `healthStatusCode` contract.
+- **Fix:** Document the pinned-build behaviour and refresh the stale rationale.
+
 ## DOC-DRIFT — stale Config.apiBaseUrl references and empty CHANGELOG
 
 - **Plane:** IC-75
