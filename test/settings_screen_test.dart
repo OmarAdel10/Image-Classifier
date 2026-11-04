@@ -11,6 +11,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
+import 'support/delayed_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 
 /// A built settings screen together with the [ApiClient] instance it uses.
@@ -106,21 +107,29 @@ void main() {
     testWidgets('keeps text typed while the stored URL resolves', (
       WidgetTester tester,
     ) async {
-      SharedPreferences.setMockInitialValues({
-        Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+      // The store read is held open so the text is typed *before* the stored
+      // URL arrives: the non-clobber guard in _loadCurrentUrl only matters
+      // when the resolve completes after the user has typed.
+      final store = DelayedPrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
       });
+      SharedPreferencesStorePlatform.instance = store;
+      SharedPreferences.resetStatic();
 
       await tester.pumpWidget(
         _buildSettingsScreen(
           MockClient((request) async => http.Response('{}', 200)),
         ).widget,
       );
-      // Do not settle first: let the user type before the storage resolve
-      // completes, exercising the non-clobber guard in _loadCurrentUrl.
       await tester.enterText(
         find.byType(TextField),
         'http://typed.example.com:9000',
       );
+      await tester.pump();
+
+      // The stored URL only now becomes available.
+      store.release();
       await tester.pumpAndSettle();
 
       final field = tester.widget<TextField>(find.byType(TextField));
@@ -214,6 +223,29 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(await harness.client.baseUrl, 'http://saved.example.com:9000');
+    });
+
+    testWidgets('Reset to Default makes the live client use the default URL', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+      });
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      // Resolve (and cache) the stored URL before resetting.
+      expect(await harness.client.baseUrl, 'http://stored.example.com:1234');
+
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      // The client must not keep using the cached (now cleared) URL.
+      expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
     });
 
     testWidgets('pinned build shows the banner and disables Save', (
