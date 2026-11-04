@@ -399,6 +399,13 @@ void main() {
           await expectInvalidJsonResponse('[1,2]');
         },
       );
+
+      test(
+        'a 200 whose classes field is not a list produces an ApiException 502',
+        () async {
+          await expectInvalidJsonResponse('{"classes": "not-a-list"}');
+        },
+      );
     });
   });
 }

@@ -31,8 +31,8 @@ void main() {
     });
 
     group('platformDefaultApiBaseUrl', () {
-      test('is http://localhost:8000 on Linux', () {
-        expect(Platform.isLinux, isTrue);
+      test('matches the non-Android platform default', () {
+        if (Platform.isAndroid) return;
         expect(Config.platformDefaultApiBaseUrl, 'http://localhost:8000');
       });
     });
@@ -60,38 +60,35 @@ void main() {
       });
     });
 
-    group('apiBaseUrl', () {
-      test('returns platform default when no compile-time override', () {
+    group('compile-time override precedence', () {
+      test('uses the platform default when no override is set', () async {
         expect(Config.compileTimeApiBaseUrl, isEmpty);
-        expect(Config.apiBaseUrl, Config.platformDefaultApiBaseUrl);
-        expect(Config.apiBaseUrl, 'http://localhost:8000');
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+        expect(await Config.resolveApiBaseUrl(), 'http://localhost:8000');
       });
 
-      test('effectiveApiBaseUrl uses a non-empty override, normalized', () {
+      test('uses a non-empty override, normalized', () async {
         expect(
-          Config.effectiveApiBaseUrl(
+          await Config.resolveApiBaseUrl(
             compileTimeOverride: '  http://compile.example.com:8000/  ',
           ),
           'http://compile.example.com:8000',
         );
       });
 
-      test('effectiveApiBaseUrl falls back to the platform default', () {
-        expect(
-          Config.effectiveApiBaseUrl(compileTimeOverride: ''),
-          Config.platformDefaultApiBaseUrl,
-        );
-        expect(
-          Config.effectiveApiBaseUrl(compileTimeOverride: ''),
-          'http://localhost:8000',
-        );
-      });
-
-      test('ignores a runtime override (storage is not consulted)', () {
+      test('ignores a runtime override under a pin', () async {
         SharedPreferences.setMockInitialValues({
           Config.apiBaseUrlPrefsKey: 'http://runtime.example.com:1234',
         });
-        expect(Config.apiBaseUrl, Config.platformDefaultApiBaseUrl);
+        expect(
+          await Config.resolveApiBaseUrl(
+            compileTimeOverride: 'http://compile.example.com:8000',
+          ),
+          'http://compile.example.com:8000',
+        );
       });
     });
 
@@ -168,6 +165,26 @@ void main() {
       test('accepts a well-formed http URL', () {
         expect(Config.isValidApiBaseUrl('http://example.com'), isTrue);
       });
+
+      test('rejects a URL with a query string', () {
+        expect(Config.isValidApiBaseUrl('http://example.com/?x=1'), isFalse);
+      });
+
+      test('rejects a URL with a fragment', () {
+        expect(Config.isValidApiBaseUrl('http://example.com/#frag'), isFalse);
+      });
+
+      test('rejects a URL with internal whitespace', () {
+        expect(Config.isValidApiBaseUrl('http://exa mple.com'), isFalse);
+      });
+
+      test('rejects a URL whose port is out of range', () {
+        expect(Config.isValidApiBaseUrl('http://example.com:99999'), isFalse);
+      });
+
+      test('rejects a URL with an invalid percent escape in the host', () {
+        expect(Config.isValidApiBaseUrl('http://exa%zzmple.com'), isFalse);
+      });
     });
 
     group('validateStartupApiBaseUrl', () {
@@ -206,8 +223,8 @@ void main() {
         );
       });
 
-      test('clearApiBaseUrl does not throw', () async {
-        await expectLater(Config.clearApiBaseUrl(), completes);
+      test('clearApiBaseUrl reports false when storage fails', () async {
+        expect(await Config.clearApiBaseUrl(), isFalse);
       });
 
       test('setApiBaseUrl throws StateError', () async {
@@ -215,6 +232,36 @@ void main() {
           Config.setApiBaseUrl('http://saved.example.com:9000'),
           throwsA(isA<StateError>()),
         );
+      });
+
+      test('setApiBaseUrl refuses a pinned build', () async {
+        await expectLater(
+          Config.setApiBaseUrl(
+            'http://saved.example.com:9000',
+            compileTimeOverride: 'http://compile.example.com:8000',
+          ),
+          throwsA(isA<StateError>()),
+        );
+      });
+    });
+
+    group('clearApiBaseUrl return value', () {
+      test('reports true when the override is removed', () async {
+        SharedPreferences.setMockInitialValues({
+          Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+        });
+
+        expect(await Config.clearApiBaseUrl(), isTrue);
+        expect(
+          await Config.resolveApiBaseUrl(),
+          isNot('http://stored.example.com:1234'),
+        );
+      });
+
+      test('reports true when no override was stored', () async {
+        SharedPreferences.setMockInitialValues({});
+
+        expect(await Config.clearApiBaseUrl(), isTrue);
       });
     });
 

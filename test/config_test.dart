@@ -33,7 +33,10 @@ void main() {
 
     test('default apiBaseUrl is valid', () {
       // Guards the shipped default so main() never throws out of the box.
-      expect(Config.isValidApiBaseUrl(Config.apiBaseUrl), isTrue);
+      expect(
+        Config.isValidApiBaseUrl(Config.platformDefaultApiBaseUrl),
+        isTrue,
+      );
     });
   });
 

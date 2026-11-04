@@ -192,9 +192,13 @@ void main() {
       expect(await harness.client.baseUrl, 'http://saved.example.com:9000');
     });
 
-    testWidgets('warns that a compile-time override wins over the saved URL', (
+    testWidgets('pinned build shows the banner and disables Save', (
       WidgetTester tester,
     ) async {
+      SharedPreferences.setMockInitialValues({
+        Config.apiBaseUrlPrefsKey: 'http://saved.example.com:9000',
+      });
+
       await tester.pumpWidget(
         _buildSettingsScreen(
           MockClient((request) async => http.Response('{}', 200)),
@@ -203,17 +207,16 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byType(TextField),
-        'http://saved.example.com:9000',
+      expect(
+        find.textContaining('Pinned by --dart-define=API_BASE_URL='),
+        findsOneWidget,
       );
-      await tester.pump();
+      // The field is pre-filled with the pinned URL it can probe but not save.
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, 'http://compile.example.com:8000');
 
-      await tester.tap(_buttonWithLabel('Save'));
-      await tester.pumpAndSettle();
-
-      expect(find.textContaining('overrides it'), findsOneWidget);
-      expect(find.textContaining('compile.example.com:8000'), findsOneWidget);
+      final saveButton = tester.widget<FilledButton>(_buttonWithLabel('Save'));
+      expect(saveButton.onPressed, isNull);
     });
 
     testWidgets('Save shows an error banner when storage fails', (
@@ -363,5 +366,55 @@ void main() {
       expect(find.textContaining('Reached'), findsOneWidget);
       expect(find.textContaining('HTTP 500'), findsOneWidget);
     });
+
+    testWidgets('Test Connection survives a client exception while probing', (
+      WidgetTester tester,
+    ) async {
+      final mockClient = MockClient((request) async {
+        throw http.ClientException('connection closed');
+      });
+
+      await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+      await tester.pumpAndSettle();
+
+      await tester.tap(_buttonWithLabel('Test Connection'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining(
+          'Could not reach ${Config.platformDefaultApiBaseUrl}',
+        ),
+        findsOneWidget,
+      );
+      // The probe finished: the button is re-enabled for another attempt.
+      final probeButton = tester.widget<FilledButton>(
+        _buttonWithLabel('Test Connection'),
+      );
+      expect(probeButton.onPressed, isNotNull);
+    });
+
+    testWidgets(
+      'Test Connection reports unexpected probe failures without crashing',
+      (WidgetTester tester) async {
+        final mockClient = MockClient((request) async {
+          throw Exception('boom');
+        });
+
+        await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+        await tester.pumpAndSettle();
+
+        await tester.tap(_buttonWithLabel('Test Connection'));
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining(
+            'Could not test ${Config.platformDefaultApiBaseUrl}',
+          ),
+          findsOneWidget,
+        );
+      },
+    );
   });
 }
