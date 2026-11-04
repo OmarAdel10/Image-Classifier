@@ -50,8 +50,13 @@ jobs:
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /home/runner/.cache/cnn-cifar10
-          key: cifar10-python-md5-c58f3010
-          restore-keys: cifar10-python-
+          # The key is versioned: an immutable key that once held a corrupt
+          # archive can never be overwritten, so the poisoned entry would
+          # survive forever. 'v2' misses the poisoned key exactly and the
+          # restore-key is narrowed to the same version, so the bad entry
+          # is never restored at all.
+          key: cifar10-python-md5-c58f3010-v2
+          restore-keys: cifar10-python-md5-c58f3010-v2
 
       - name: Download and verify CIFAR-10 (self-healing cache)
         run: |
@@ -80,13 +85,20 @@ jobs:
               'https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'; do
               echo "Downloading CIFAR-10 from $url"
               for attempt in 1 2; do
+                # The partial file is kept between attempts of the SAME
+                # source so 'curl -C -' can resume it. A resume across two
+                # different byte streams would splice two files together,
+                # so the partial download is dropped when the source
+                # changes (after the last attempt of a URL).
                 timeout 1500 curl -fL -C - --retry 3 --retry-all-errors \
                   --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
                   -o cifar-10-python.tar.gz "$url" || true
                 if verify; then
                   break 2
                 fi
-                rm -f cifar-10-python.tar.gz
+                if [ "$attempt" -eq 2 ]; then
+                  rm -f cifar-10-python.tar.gz
+                fi
               done
             done
           fi
@@ -100,13 +112,16 @@ jobs:
       - name: Save verified CIFAR-10 dataset cache
         # Only a hash-verified archive is ever cached. Saving a partial
         # download under the immutable key poisoned every later run that
-        # restored it (self-sustaining failure loop).
+        # restored it (self-sustaining failure loop). The versioned key
+        # retires the poisoned entry: the verified archive is written under
+        # the new key, so later runs hit it exactly. The save action reports
+        # a cache-reservation conflict as a warning and never fails the job
+        # on its own, so no continue-on-error mask is needed.
         if: steps.cifar-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /home/runner/.cache/cnn-cifar10
-          key: cifar10-python-md5-c58f3010
+          key: cifar10-python-md5-c58f3010-v2
 
       - name: Cache pretrained model weights
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
