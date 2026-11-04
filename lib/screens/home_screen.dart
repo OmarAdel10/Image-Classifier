@@ -236,18 +236,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Theme.of(context).colorScheme.error,
-        action: SnackBarAction(
-          label: 'Settings',
-          textColor: Theme.of(context).colorScheme.onError,
-          onPressed: _openSettings,
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          action: SnackBarAction(
+            label: 'Settings',
+            textColor: Theme.of(context).colorScheme.onError,
+            onPressed: _openSettings,
+          ),
+          duration: const Duration(seconds: 8),
         ),
-        duration: const Duration(seconds: 8),
-      ),
-    );
+      );
   }
 
   void _showImageErrorSnackBar(String message) {

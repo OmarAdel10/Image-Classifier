@@ -83,9 +83,15 @@ class ApiClient {
       return null;
     } on SocketException {
       return null;
+    } on http.ClientException {
+      return null;
     } on HttpException {
       return null;
     } on FormatException {
+      return null;
+    } on ArgumentError {
+      return null;
+    } on IOException {
       return null;
     }
   }
@@ -164,7 +170,6 @@ class ApiClient {
   /// internally (which this class does not do by default).
   Future<void> dispose() async {
     // No-op by default — caller owns the client lifecycle.
-    // Override in a subclass if internal client management is added.
   }
 
   /// Runs [request], translating transport failures into [ApiException].
@@ -189,14 +194,38 @@ class ApiClient {
             'the address is reachable from this device.',
         statusCode: 503,
       );
+    } on http.ClientException catch (e) {
+      throw ApiException(
+        message:
+            'Connection to $url failed: ${e.message}. '
+            'Check that the backend is running and reachable from this device.',
+        statusCode: 502,
+      );
     } on HttpException {
       throw ApiException(
         message: 'HTTP error while contacting $url.',
         statusCode: 502,
       );
+    } on IOException catch (e) {
+      throw ApiException(
+        message: 'Connection to $url failed: $e.',
+        statusCode: 503,
+      );
     } on FormatException catch (e) {
       throw ApiException(
         message: 'Invalid response from $url: ${e.message}',
+        statusCode: 502,
+      );
+    } on TypeError {
+      throw ApiException(
+        message:
+            'Invalid response from $url: unexpected response shape. '
+            'Is the backend the image classifier API?',
+        statusCode: 502,
+      );
+    } on ArgumentError catch (e) {
+      throw ApiException(
+        message: 'Invalid backend address $url: ${e.message}',
         statusCode: 502,
       );
     }
@@ -234,14 +263,12 @@ class ApiClient {
       if (json is Map<String, dynamic> && json['detail'] != null) {
         final detail = json['detail'];
         if (detail is String) {
-          // Sanitize: limit length and strip control characters (IC-57)
           return _sanitizeErrorMessage(detail);
         }
       }
     } catch (_) {
       // Fall through to default message
     }
-    // Sanitize fallback message to avoid leaking sensitive data (IC-57)
     return _sanitizeErrorMessage('Request failed with status $body');
   }
 
