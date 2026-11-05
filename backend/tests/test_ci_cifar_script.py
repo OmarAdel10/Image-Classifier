@@ -22,6 +22,8 @@ import subprocess
 from pathlib import Path
 from typing import NamedTuple
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "backend" / "scripts" / "fetch_cifar10.sh"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
@@ -112,12 +114,15 @@ def _run_script(
     fail_substring: str | None = None,
     md5: str | None = None,
     sha256: str | None = None,
+    cache_dir: Path | None = None,
 ):
     """Runs the download script with a stubbed curl.
 
     ``urls=None`` keeps the production source list of the script, so the
     default mirror order can be observed. ``md5``/``sha256`` override the
-    pinned digests the script verifies against.
+    pinned digests the script verifies against. ``cache_dir`` overrides the
+    cache directory, so a test can point the script at a directory that does
+    not exist yet.
 
     Returns the completed process and the recorded curl calls.
     """
@@ -131,8 +136,11 @@ def _run_script(
     corrupt_file = tmp_path / "corrupt.bin"
     corrupt_file.write_bytes(CORRUPT_PAYLOAD)
 
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir(exist_ok=True)
+    if cache_dir is None:
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir(exist_ok=True)
+    elif existing_archive is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
     if existing_archive is not None:
         (cache_dir / ARCHIVE_NAME).write_bytes(existing_archive)
 
@@ -216,7 +224,8 @@ def test_corrupt_cache_is_purged_and_downloaded_again(tmp_path: Path) -> None:
     assert process.returncode == 0, process.stdout + process.stderr
     # The corrupt archive was removed before the download, so the download
     # started from byte 0 instead of resuming on top of the broken file.
-    assert calls == [CurlCall("https://example.test/good", 0, calls[0].argv)]
+    assert [call.url for call in calls] == ["https://example.test/good"]
+    assert [call.size for call in calls] == [0]
     # Both digests are verified: md5sum and sha256sum each print one OK line.
     assert process.stdout.count(f"{ARCHIVE_NAME}: OK") == 2
 
@@ -253,7 +262,7 @@ def test_partial_download_is_dropped_when_the_source_changes(tmp_path: Path) -> 
     # The second source starts from byte 0: resuming on top of the first
     # source's bytes would splice two different archives together.
     good_calls = [call for call in calls if call.url == "https://example.test/good"]
-    assert good_calls == [CurlCall("https://example.test/good", 0, good_calls[0].argv)]
+    assert [call.size for call in good_calls] == [0]
 
 
 def test_a_matching_md5_does_not_excuse_a_wrong_sha256(tmp_path: Path) -> None:
@@ -305,8 +314,118 @@ def test_workflows_share_the_script_and_one_cache_key() -> None:
         text = (WORKFLOW_DIR / name).read_text()
         assert "scripts/fetch_cifar10.sh" in text, f"{name} does not use the script"
         assert CACHE_KEY in text, f"{name} uses another key"
-        # The download logic must not be duplicated inline any more.
-        assert "md5sum -c --status" not in text, f"{name} inlines the download logic"
+
+
+def _load_workflow(name: str) -> dict:
+    """Parses a workflow file, so a broken YAML fails the suite."""
+    return yaml.safe_load((WORKFLOW_DIR / name).read_text())
+
+
+def _backend_job(name: str) -> dict:
+    workflow = _load_workflow(name)
+    jobs = workflow["jobs"]
+    assert "python-backend" in jobs, f"{name} has no python-backend job"
+    return jobs["python-backend"]
+
+
+def _step_by_name(job: dict, prefix: str) -> tuple[int, dict]:
+    for index, step in enumerate(job["steps"]):
+        if str(step.get("name", "")).startswith(prefix):
+            return index, step
+    raise AssertionError(f"no step named {prefix!r}")
+
+
+def test_the_backend_job_has_a_120_minute_timeout() -> None:
+    """The job must be allowed the budget the download script can use.
+
+    The archive is ~170 MB and the throttled origin served it at ~80 KB/s,
+    so the old 45 minute budget could not finish the download. The timeout
+    is part of the fix, so it needs a regression test.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        assert job.get("timeout-minutes") == 120, f"{name} has another job timeout"
+
+
+def test_the_workflow_is_valid_yaml_with_the_cache_steps_in_order() -> None:
+    """The cache contract is asserted on the parsed workflow, not on text.
+
+    A regex over the raw file cannot tell a broken YAML file from a working
+    one, and it cannot see that the save step lost its gate.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+
+        restore_index, restore = _step_by_name(job, "Restore CIFAR-10")
+        download_index, download = _step_by_name(job, "Download and verify CIFAR-10")
+        save_index, save = _step_by_name(job, "Save verified CIFAR-10")
+
+        assert (
+            restore_index < download_index < save_index
+        ), f"{name} runs the cache steps out of order"
+
+        assert restore["uses"].startswith("actions/cache/restore@")
+        assert restore["id"] == "cifar-cache"
+        assert restore["with"]["path"] == CACHE_PATH
+        assert restore["with"]["key"] == CACHE_KEY
+
+        # The script must be run through bash: the file is not executable, so
+        # './scripts/fetch_cifar10.sh' would fail in CI.
+        assert download["working-directory"] == "backend"
+        assert download["run"].strip() == f"bash scripts/fetch_cifar10.sh {CACHE_PATH}"
+
+        assert save["uses"].startswith("actions/cache/save@")
+        assert save["if"].strip() == "steps.cifar-cache.outputs.cache-hit != 'true'"
+        assert save["with"]["path"] == CACHE_PATH
+        assert save["with"]["key"] == CACHE_KEY
+
+
+def test_the_script_pins_the_download_budget() -> None:
+    """The attempt count and the per-attempt timeout are part of the fix.
+
+    They decide how long a broken source can hold the job, so their
+    production defaults must not change unnoticed.
+    """
+    text = SCRIPT.read_text()
+    assert re.search(r"CIFAR10_ATTEMPTS:-(\d+)", text).group(1) == "2"
+    assert re.search(r"CIFAR10_TIMEOUT:-(\d+)", text).group(1) == "1500"
+
+
+def test_the_download_aborts_a_stalled_transfer(tmp_path: Path) -> None:
+    """A stalled transfer must not hold the job for the whole budget.
+
+    The throttled origin once kept the job running for 37 minutes without
+    delivering the archive, so the speed guard has to stay.
+    """
+    process, calls = _run_script(tmp_path, ["https://example.test/good"])
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    argv = calls[0].argv
+    for flag, value in (
+        ("--speed-limit", "1024"),
+        ("--speed-time", "120"),
+        ("--connect-timeout", "30"),
+        ("--retry", "3"),
+    ):
+        assert flag in argv, f"{flag} is missing from the curl call"
+        assert value in argv, f"{flag} {value} is missing from the curl call"
+
+
+def test_the_script_creates_a_missing_cache_directory(tmp_path: Path) -> None:
+    """The script has to create its cache directory itself.
+
+    A fresh runner has no cache directory, and the workflow does not create
+    one before calling the script.
+    """
+    cache_dir = tmp_path / "missing" / "cache"
+    process, _calls = _run_script(
+        tmp_path,
+        ["https://example.test/good"],
+        cache_dir=cache_dir,
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert (cache_dir / ARCHIVE_NAME).is_file()
 
 
 def test_workflows_save_the_cifar_cache_only_after_it_was_verified() -> None:
