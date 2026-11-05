@@ -48,16 +48,37 @@ matching Plane work item.
 - **Location:** `.github/workflows/backend-ci.yml:86`,
   `.github/workflows/image-classifier-ci.yml:124`
 - **Finding:** `backend-ci.yml` keys the torch weight cache on
-  `torch-pretrained-tv-0.29.1-sha256-<cifar sha256>` and runs a
-  `Verify torch cache integrity` step, while `image-classifier-ci.yml` uses the
-  bare key `torch-pretrained-tv-0.29.1` and has no verification step, so the two
-  workflows cache different weights and only one of them is integrity-checked.
-- **Fix:** Merge the two workflows into one, or give both the same verified key.
+  `torch-pretrained-tv-0.29.1-sha256-<cifar sha256>` while
+  `image-classifier-ci.yml` uses the bare key `torch-pretrained-tv-0.29.1`, so
+  the two workflows cache different weights under different keys. Neither
+  workflow integrity-checks the cached weights: the `Verify torch cache
+  integrity` step in `backend-ci.yml` only echoes two strings, and the weights
+  are loaded through `torch.load(path, weights_only=True)`
+  (`backend/src/cnn_classifier/inference/checkpoints.py:107`) and
+  `resnet18/vgg16(weights=...)`
+  (`backend/src/cnn_classifier/models/transfer.py:53,58`).
+- **Fix:** Merge the two workflows into one, or give both the same key and
+  verify the cached weights in both.
+
+## TORCH-CACHE-VERIFY — torch cache integrity step verifies nothing
+
+- **Plane:** IC-79
+- **Location:** `.github/workflows/backend-ci.yml:89-96`
+- **Finding:** The `Verify torch cache integrity` step only echoes two strings;
+  it never hashes or compares the cached weights. Its comments claim the
+  weights are loaded with `torch.hub.load_state_dict_from_url(check_hash=True)`
+  and that the cache key "transitively verifies the dataset integrity" —
+  neither is true: no `check_hash`, `torch.hub` or `load_state_dict_from_url`
+  call exists in the repository, and the key embeds the CIFAR-10 *dataset*
+  hash, not a digest of the weights.
+- **Fix:** Replace the echo with a real check (hash the cached files and
+  compare them against a pinned digest), or delete the step together with its
+  misleading comments.
 
 ## FLAKY-HOME — flaky home_screen snackbar test
 
 - **Plane:** IC-71
-- **Location:** `test/home_screen_test.dart:200`
+- **Location:** `test/home_screen_test.dart:229`
 - **Finding:** The `prediction errors offer a Settings action that navigates`
   test was observed to fail intermittently: the Settings-action SnackBar is
   queued from an async error path, so the widget lookup can run before the
@@ -89,24 +110,26 @@ matching Plane work item.
 - **Fix:** Use one cache key per workflow, allow the save step to write a
   repair key, and pin the archive.org capture id.
 
-## API-MESSAGES — misleading exception messages and an unreachable port bound
+## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
 - **Location:** `lib/services/api_client.dart:214`,
-  `lib/services/api_client.dart:226`, `lib/config.dart:166`
+  `lib/services/api_client.dart:226`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, a
   `MultipartFile.fromPath` `ArgumentError` is reported as
   `Invalid backend address ...` although the file is missing, and
-  `${e.message}` can render `null`. `uri.port > 65535` is unreachable because
-  the URI parser rejects such a port first.
-- **Fix:** Map each exception to the message that describes its real cause and
-  drop the unreachable port check.
+  `${e.message}` can render `null`.
+- **Fix:** Map each exception to the message that describes its real cause.
+- **Note:** The port bound at `lib/config.dart:166` (`uri.port > 65535`) is
+  load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
+  so `http://example.com:99999` parses successfully and only this check
+  rejects it.
 
 ## README-PINNED — stale pinned-build documentation
 
 - **Plane:** IC-78
-- **Location:** `README.md:140`, `docs/followups.md` (SETTINGS-DEAD-BRANCH)
+- **Location:** `README.md:141-143`, `docs/followups.md` (SETTINGS-DEAD-BRANCH)
 - **Finding:** The README still says the runtime override is ignored when a
   compile-time override is present, but a pinned build can no longer create one
   (Save is disabled and `Config` throws), and the `SETTINGS-DEAD-BRANCH` entry
@@ -125,3 +148,22 @@ matching Plane work item.
   discoverable in either the plan or the changelog.
 - **Fix:** Update the plan document to reference `Config.resolveApiBaseUrl()`, and
   add a `CHANGELOG.md` entry for the removed getters.
+
+## DEAD-CONFIG-BRANCHES — unreachable API-configuration branches and weak assertions
+
+- **Plane:** IC-80
+- **Location:** `lib/screens/settings_screen.dart` (save path),
+  `lib/config.dart` (`validateStartupApiBaseUrl`),
+  `lib/services/api_client.dart` (`healthStatusCode`)
+- **Finding:** Three branches cannot be reached from the shipped app: (1) the
+  `compileTimeOverride` argument of the settings save path is unreachable
+  because Save is disabled in a pinned build; (2) the normalisation inside
+  `Config.validateStartupApiBaseUrl` is outcome-equivalent to the validation
+  that follows it, because `isValidApiBaseUrl` already trims and a trailing
+  slash does not affect validity; (3) the `ApiException` arm in the settings
+  screen catch is unreachable because `healthStatusCode` swallows transport
+  errors (cross-ref IC-72). The last review also flagged weak assertions: a
+  redundant whitespace-only URL case, a test that taps a disabled button, and
+  snackbar replace-versus-queue checks that rely on text finders only.
+- **Fix:** Remove the dead branches or make them reachable, and tighten the
+  flagged assertions.
