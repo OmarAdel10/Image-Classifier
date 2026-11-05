@@ -26,7 +26,7 @@ matching Plane work item.
 ## SETTINGS-DEAD-BRANCH — unreachable ApiException arm in _testConnection banner
 
 - **Plane:** IC-72
-- **Location:** `lib/screens/settings_screen.dart:109`
+- **Location:** `lib/screens/settings_screen.dart:120`
 - **Finding:** `e is ApiException ? e.message : e` — the `ApiException` arm is dead:
   `healthStatusCode()` catches everything and returns null, so it never throws
   `ApiException` here.
@@ -78,7 +78,7 @@ matching Plane work item.
 ## FLAKY-HOME — flaky home_screen snackbar test
 
 - **Plane:** IC-71
-- **Location:** `test/home_screen_test.dart:266`
+- **Location:** `test/home_screen_test.dart:268`
 - **Finding:** The `prediction errors offer a Settings action that navigates`
   test was observed to fail intermittently: the Settings-action SnackBar is
   queued from an async error path, so the widget lookup can run before the
@@ -178,15 +178,55 @@ matching Plane work item.
 - **Location:** `lib/screens/settings_screen.dart` (save path),
   `lib/config.dart` (`validateStartupApiBaseUrl`),
   `lib/services/api_client.dart` (`healthStatusCode`)
-- **Finding:** Three branches cannot be reached from the shipped app: (1) the
+- **Finding:** Four branches cannot be reached from the shipped app: (1) the
   `compileTimeOverride` argument of the settings save path is unreachable
   because Save is disabled in a pinned build; (2) the normalisation inside
   `Config.validateStartupApiBaseUrl` is outcome-equivalent to the validation
   that follows it, because `isValidApiBaseUrl` already trims and a trailing
   slash does not affect validity; (3) the `ApiException` arm in the settings
   screen catch is unreachable because `healthStatusCode` swallows transport
-  errors (cross-ref IC-72). The last review also flagged weak assertions: a
+  errors (cross-ref IC-72); (4) the `ArgumentError` arm of the settings
+  screen `_describeError` helper is unreachable because `_save` validates the
+  URL with the same predicate before calling `Config`, so `Config` only ever
+  raises a `StateError` there. The last review also flagged weak assertions:
+  a
   redundant whitespace-only URL case, a test that taps a disabled button, and
   snackbar replace-versus-queue checks that rely on text finders only.
 - **Fix:** Remove the dead branches or make them reachable, and tighten the
   flagged assertions.
+
+## PREDICTION-ERROR-CATCH — the provider catches every Error subtype
+
+- **Plane:** IC-82
+- **Location:** `lib/providers/prediction_provider.dart:61`
+- **Finding:** The `on Error` arm of the prediction request catches every
+  `Error` subtype — `AssertionError`, `OutOfMemoryError` and a failing
+  `TypeError` alike — and surfaces `e.toString()` to the user.
+- **Fix:** Narrow the arm to the errors that can actually escape the request
+  path, or map the caught error to a user-facing message that does not expose
+  the raw error text. The arm must stay broad enough to keep the provider out
+  of a permanently stuck loading state.
+
+## CURL-HARNESS-RANGE — the stubbed curl ignores the requested byte range
+
+- **Plane:** IC-83
+- **Location:** `backend/tests/test_ci_cifar_script.py` (stub `curl`)
+- **Finding:** The stub appends the whole payload when `-C` is requested,
+  instead of serving the bytes from the requested offset the way a real
+  `curl -C -` does. A resumed download in the harness is therefore always
+  corrupt, so the resume path can only be asserted as a failure.
+- **Fix:** Make the stub honour the range and serve the payload from the
+  requested offset, so a resumed download can succeed and the resume rule is
+  exercised against the real semantics.
+
+## CONFIG-PREV-READ — the previous-URL read is outside the guarded try
+
+- **Plane:** IC-84
+- **Location:** `lib/config.dart:137`
+- **Finding:** `Config.setApiBaseUrl` reads the previously stored URL with
+  `prefs.getString(apiBaseUrlPrefsKey)` outside the guarded try. A non-string
+  value under that key would raise a raw `TypeError` instead of the documented
+  `StateError`. The shipped app only ever writes a string under the key, so
+  the path is not reachable today.
+- **Fix:** Move the read inside the guarded region, or read it with a type
+  check that falls back to the documented `StateError`.
