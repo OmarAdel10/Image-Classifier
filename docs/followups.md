@@ -78,7 +78,7 @@ matching Plane work item.
 ## FLAKY-HOME — flaky home_screen snackbar test
 
 - **Plane:** IC-71
-- **Location:** `test/home_screen_test.dart:229`
+- **Location:** `test/home_screen_test.dart:266`
 - **Finding:** The `prediction errors offer a Settings action that navigates`
   test was observed to fail intermittently: the Settings-action SnackBar is
   queued from an async error path, so the widget lookup can run before the
@@ -149,12 +149,13 @@ matching Plane work item.
 - **Fix:** Update the plan document to reference `Config.resolveApiBaseUrl()`, and
   add a `CHANGELOG.md` entry for the removed getters.
 
-## STORAGE-REFUSAL — a refused storage write stays effective in the session
+## STORAGE-REFUSAL — shared_preferences caches a refused write
 
 - **Plane:** IC-81
-- **Location:** `lib/config.dart:135` (`setApiBaseUrl`),
-  `lib/config.dart:172` (`clearApiBaseUrl`),
-  `lib/screens/settings_screen.dart:176` (`_resetToDefault`)
+- **Location:** `lib/config.dart:137` (`setApiBaseUrl`),
+  `lib/config.dart:159` (`_rollbackStoredUrl`),
+  `lib/config.dart:178` (`clearApiBaseUrl`),
+  `lib/screens/settings_screen.dart:187` (`_resetToDefault`)
 - **Finding:** `shared_preferences` 2.5.6 updates its in-memory cache *before* the
   platform call: `_setValue` writes `_preferenceCache[key]` and `remove` deletes
   `_preferenceCache[key]` before the platform answers. A refused write therefore
@@ -162,11 +163,13 @@ matching Plane work item.
   `Could not save`, and a refused removal left the override inactive while the
   UI claimed it was "still in use". The platform may also restore a refused
   removal after a restart, which Dart cannot prevent.
-- **Fix:** **Delivered by PR #30** — a refused write now rolls the in-memory
-  value back (`Config._rollbackStoredUrl`) and reports the refusal, and a
-  refused removal is reported as "not active now, but it may return after a
-  restart". The remaining platform-level gap (confirming a removal by
-  re-reading the persisted value) is tracked in IC-81.
+- **Fix:** **Delivered by PR #30** — a refused write now reloads the persisted
+  state (`Config._rollbackStoredUrl`), so the app keeps using the address that
+  is actually stored instead of the rejected one or the platform default, and
+  the refusal is reported with its cause. A refused removal is reported as "not
+  active now, but it may return after a restart". The remaining platform-level
+  gap (confirming a removal by re-reading the persisted value) is tracked in
+  IC-81.
 
 ## DEAD-CONFIG-BRANCHES — unreachable API-configuration branches and weak assertions
 
