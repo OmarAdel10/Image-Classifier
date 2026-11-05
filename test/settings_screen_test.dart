@@ -13,6 +13,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 
 import 'support/delayed_prefs_store.dart';
 import 'support/false_prefs_store.dart';
+import 'support/false_removing_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 
 /// A built settings screen together with the [ApiClient] instance it uses.
@@ -223,6 +224,12 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(probed, ['http://saved.example.com:9000/health']);
+      // The banner shows the normalized URL, so a trailing slash cannot hide
+      // in the message the user reads.
+      expect(
+        find.text('Connected to http://saved.example.com:9000'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('Save makes the live client use the new URL', (
@@ -335,6 +342,8 @@ void main() {
 
       expect(find.textContaining('Could not save'), findsOneWidget);
       expect(find.textContaining('Saved. Using'), findsNothing);
+      // The refused URL must not be used by the app either.
+      expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
 
       await tester.scrollUntilVisible(
         find.text('Reset to Default'),
@@ -345,9 +354,40 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.textContaining('Could not clear the stored URL'),
+        find.textContaining('Could not remove the stored URL'),
         findsOneWidget,
       );
+      expect(find.textContaining('still in use'), findsNothing);
+    });
+
+    testWidgets('a refused reset says the stored URL is not active now', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = FalseRemovingPrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
+      });
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('Reset to Default'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      // The platform refused the removal, but the in-memory cache is gone, so
+      // the stored URL is not in use - the message must not claim otherwise.
+      expect(find.textContaining('not active now'), findsOneWidget);
+      expect(find.textContaining('still in use'), findsNothing);
+      expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
     });
 
     testWidgets('pinned build shows the banner and disables Save', (
@@ -523,9 +563,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.textContaining('Could not clear the stored URL'),
+        find.textContaining('Could not remove the stored URL'),
         findsOneWidget,
       );
+      expect(find.textContaining('still in use'), findsNothing);
       // The field keeps showing the resolved default; nothing was cleared.
       final field = tester.widget<TextField>(find.byType(TextField));
       expect(field.controller?.text, Config.platformDefaultApiBaseUrl);
