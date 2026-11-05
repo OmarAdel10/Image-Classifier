@@ -92,6 +92,8 @@ class Config {
   /// [StateError] when the store refuses the write or when
   /// [compileTimeOverride] pins the build: a value that cannot take effect
   /// now would be a dormant redirect for a later unpinned build.
+  /// A refused write restores the previously stored URL instead of dropping
+  /// it, so a failed save never discards a working backend address.
   /// Pass `null`, an empty string, or whitespace to clear the override. The
   /// clear path runs before the pinned check, so a pinned build may still
   /// remove a stored override; it can never create one.
@@ -138,24 +140,28 @@ class Config {
       throw StateError('Could not store the API base URL.');
     }
     if (!stored) {
-      // The platform refused the write. Roll the cached value back, so the
-      // app does not keep using a URL that was never stored.
+      // The platform refused the write. Reload the persisted state, so the
+      // app keeps using the URL that is actually stored instead of the one
+      // that was never saved.
       await _rollbackStoredUrl(prefs);
       throw StateError('Could not store the API base URL.');
     }
   }
 
-  /// Drops the cached override after a failed write.
+  /// Restores the persisted override after a failed write.
   ///
   /// `shared_preferences` writes to its in-memory cache before it calls the
   /// platform store, so a write that the platform refuses still leaves the
-  /// value visible for the rest of the session. Removing it again restores
-  /// the "no override" state.
+  /// new value visible for the rest of the session. Reloading rebuilds the
+  /// cache from the platform, which restores the previously stored URL
+  /// instead of deleting it: removing the key would throw away a working
+  /// backend address the user configured earlier.
   static Future<void> _rollbackStoredUrl(SharedPreferences prefs) async {
     try {
-      await prefs.remove(apiBaseUrlPrefsKey);
+      await prefs.reload();
     } catch (_) {
-      // Nothing else to try: the caller reports the storage failure.
+      // The platform is unreadable as well; the caller reports the storage
+      // failure and the session keeps whatever the cache holds.
     }
   }
 
