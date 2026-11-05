@@ -7,6 +7,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 
 import 'support/false_prefs_store.dart';
 import 'support/false_removing_prefs_store.dart';
+import 'support/refusing_write_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 import 'support/throwing_write_prefs_store.dart';
 
@@ -362,6 +363,35 @@ void main() {
         expect(
           await Config.resolveApiBaseUrl(),
           Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
+    group('setApiBaseUrl when the store refuses the write', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = RefusingWritePrefsStore({
+          'flutter.${Config.apiBaseUrlPrefsKey}':
+              'http://stored.example.com:1234',
+        });
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('keeps the previously stored URL in effect', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://new.example.com:9000'),
+          throwsA(isA<StateError>()),
+        );
+
+        // The refused write must not throw away the backend address that is
+        // still stored: the app keeps using the one that is persisted.
+        expect(
+          await Config.resolveApiBaseUrl(),
+          'http://stored.example.com:1234',
         );
       });
     });
