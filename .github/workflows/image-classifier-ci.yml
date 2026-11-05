@@ -111,7 +111,7 @@ jobs:
         # the new key, so later runs hit it exactly. The save action reports
         # a cache-reservation conflict as a warning and never fails the job
         # on its own, so no continue-on-error mask is needed.
-        if: steps.cifar-cache.outputs.cache-hit != 'true'
+        if: success() && steps.cifar-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /home/runner/.cache/cnn-cifar10

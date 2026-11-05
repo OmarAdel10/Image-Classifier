@@ -375,7 +375,9 @@ def test_the_workflow_is_valid_yaml_with_the_cache_steps_in_order() -> None:
         assert download["run"].strip() == f"bash scripts/fetch_cifar10.sh {CACHE_PATH}"
 
         assert save["uses"].startswith("actions/cache/save@")
-        assert save["if"].strip() == "steps.cifar-cache.outputs.cache-hit != 'true'"
+        # The gate is explicit: the cache is saved only when the restore did
+        # not hit and the job itself succeeded.
+        assert save["if"].strip() == "success() && steps.cifar-cache.outputs.cache-hit != 'true'"
         assert save["with"]["path"] == CACHE_PATH
         assert save["with"]["key"] == CACHE_KEY
 
@@ -388,7 +390,31 @@ def test_the_script_pins_the_download_budget() -> None:
     """
     text = SCRIPT.read_text()
     assert re.search(r"CIFAR10_ATTEMPTS:-(\d+)", text).group(1) == "2"
-    assert re.search(r"CIFAR10_TIMEOUT:-(\d+)", text).group(1) == "1500"
+    assert re.search(r"CIFAR10_TIMEOUT:-(\d+)", text).group(1) == "1200"
+
+
+def test_the_download_budget_fits_inside_the_job_timeout() -> None:
+    """The worst case has to end before the job is killed.
+
+    Two sources with two attempts each and the pinned per-attempt timeout
+    decide how long a broken mirror can hold the job. When that exceeds the
+    job timeout, the job is killed without the script's own error message.
+    """
+    text = SCRIPT.read_text()
+    attempts = int(re.search(r"CIFAR10_ATTEMPTS:-(\d+)", text).group(1))
+    per_attempt = int(re.search(r"CIFAR10_TIMEOUT:-(\d+)", text).group(1))
+    default_sources = re.search(r"CIFAR10_URLS:-(.*?)\}", text, re.S)
+    assert default_sources, "the script does not pin a default source list"
+    sources = len([line for line in default_sources.group(1).splitlines() if line.strip()])
+
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        job_timeout = int(job["timeout-minutes"]) * 60
+        worst_case = sources * attempts * per_attempt
+        assert worst_case < job_timeout, (
+            f"{name} can spend {worst_case} s downloading, which does not fit "
+            f"inside its {job_timeout} s job timeout"
+        )
 
 
 def test_the_download_aborts_a_stalled_transfer(tmp_path: Path) -> None:
@@ -448,7 +474,7 @@ def test_workflows_save_the_cifar_cache_only_after_it_was_verified() -> None:
         # this block.
         assert "uses: actions/cache@" not in block, f"{name} uses the unsafe plain cache"
         assert (
-            "if: steps.cifar-cache.outputs.cache-hit != 'true'" in block
+            "if: success() && steps.cifar-cache.outputs.cache-hit != 'true'" in block
         ), f"{name} saves the cache even on a cache hit"
         # The archive must be downloaded and verified before it can be saved.
         assert block.index("fetch_cifar10.sh") < block.index(

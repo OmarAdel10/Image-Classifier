@@ -17,14 +17,18 @@
 #   CIFAR10_SHA256    expected sha256 of the archive
 #   CIFAR10_URLS      newline separated list of download URLs
 #   CIFAR10_ATTEMPTS  download attempts per source (default 2)
-#   CIFAR10_TIMEOUT   seconds allowed per attempt (default 1500)
+#   CIFAR10_TIMEOUT   seconds allowed per attempt (default 1200)
 set -euo pipefail
 
 CACHE_DIR="${1:?usage: fetch_cifar10.sh <cache-dir>}"
 MD5="${CIFAR10_MD5:-c58f30108f718f92721af3b95e74349a}"
 SHA256="${CIFAR10_SHA256:-6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce}"
 ATTEMPTS="${CIFAR10_ATTEMPTS:-2}"
-TIMEOUT="${CIFAR10_TIMEOUT:-1500}"
+# Worst case: 2 sources x 2 attempts x 1200 s = 80 min, which stays inside
+# the 120 min job timeout and leaves room for the setup and the test run. A
+# larger per-attempt budget would hit the job timeout instead of the
+# script's own error path, which reports the failed download.
+TIMEOUT="${CIFAR10_TIMEOUT:-1200}"
 # The archive.org snapshot serves the identical bytes ~6x faster than the
 # throttled cs.toronto.edu origin, which cannot finish the 170 MB archive
 # inside the job budget. Both sources are verified against the pinned hashes
