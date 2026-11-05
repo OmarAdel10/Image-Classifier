@@ -316,6 +316,52 @@ def test_workflows_share_the_script_and_one_cache_key() -> None:
         assert CACHE_KEY in text, f"{name} uses another key"
 
 
+def test_the_first_verified_source_stops_the_download(tmp_path: Path) -> None:
+    """A verified archive must end the download loop.
+
+    Without the break, the next source would resume on top of the complete
+    archive, which produces a corrupt file and fails the job.
+    """
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/first", "https://example.test/second"],
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert len(calls) == 1
+    assert calls[0].url == "https://example.test/first"
+
+
+def test_a_matching_sha256_does_not_excuse_a_wrong_md5(tmp_path: Path) -> None:
+    """The md5 pin must be enforced on its own.
+
+    The archive matches the sha256 but not the md5, so the md5 line has to
+    decide the result.
+    """
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/good"],
+        md5=_md5(OTHER_PAYLOAD),
+        sha256=_sha256(PAYLOAD),
+    )
+
+    assert process.returncode == 1
+    assert "::error::CIFAR-10 archive could not be downloaded and verified." in (process.stdout)
+    assert len(calls) == 2
+
+
+def test_the_script_fails_fast_and_rejects_error_pages() -> None:
+    """The script must stop on the first error and never keep an error page.
+
+    'set -euo pipefail' makes an unexpected command failure end the script,
+    and 'curl -f' turns an HTTP error page into a failed download instead of
+    a file that is verified as broken.
+    """
+    text = SCRIPT.read_text()
+    assert "set -euo pipefail" in text
+    assert "curl -fL" in text
+
+
 def _load_workflow(name: str) -> dict:
     """Parses a workflow file, so a broken YAML fails the suite."""
     return yaml.safe_load((WORKFLOW_DIR / name).read_text())
