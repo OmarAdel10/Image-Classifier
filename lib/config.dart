@@ -130,17 +130,45 @@ class Config {
     } catch (_) {
       throw StateError('Could not store the API base URL.');
     }
-    final stored = await prefs.setString(apiBaseUrlPrefsKey, normalized);
-    if (!stored) {
+    final bool stored;
+    try {
+      stored = await prefs.setString(apiBaseUrlPrefsKey, normalized);
+    } catch (_) {
+      await _rollbackStoredUrl(prefs);
       throw StateError('Could not store the API base URL.');
+    }
+    if (!stored) {
+      // The platform refused the write. Roll the cached value back, so the
+      // app does not keep using a URL that was never stored.
+      await _rollbackStoredUrl(prefs);
+      throw StateError('Could not store the API base URL.');
+    }
+  }
+
+  /// Drops the cached override after a failed write.
+  ///
+  /// `shared_preferences` writes to its in-memory cache before it calls the
+  /// platform store, so a write that the platform refuses still leaves the
+  /// value visible for the rest of the session. Removing it again restores
+  /// the "no override" state.
+  static Future<void> _rollbackStoredUrl(SharedPreferences prefs) async {
+    try {
+      await prefs.remove(apiBaseUrlPrefsKey);
+    } catch (_) {
+      // Nothing else to try: the caller reports the storage failure.
     }
   }
 
   /// Clears any runtime API base URL override.
   ///
   /// Returns true when the override is gone (including when none was stored)
-  /// and false when storage is unavailable or the removal failed, so callers
-  /// do not report a successful reset while the old URL is still active.
+  /// and false when storage is unavailable or the platform refused the
+  /// removal, so callers do not report a successful reset while the platform
+  /// may still hold the old URL.
+  ///
+  /// A refused removal still clears the in-memory cache, so the override is
+  /// not active in this session, but the platform may restore it after a
+  /// restart.
   static Future<bool> clearApiBaseUrl() async {
     try {
       final prefs = await SharedPreferences.getInstance();
