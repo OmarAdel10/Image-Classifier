@@ -26,7 +26,7 @@ matching Plane work item.
 ## SETTINGS-DEAD-BRANCH — unreachable ApiException arm in _testConnection banner
 
 - **Plane:** IC-72
-- **Location:** `lib/screens/settings_screen.dart:108`
+- **Location:** `lib/screens/settings_screen.dart:109`
 - **Finding:** `e is ApiException ? e.message : e` — the `ApiException` arm is dead:
   `healthStatusCode()` catches everything and returns null, so it never throws
   `ApiException` here.
@@ -121,7 +121,7 @@ matching Plane work item.
   `Invalid backend address ...` although the file is missing, and
   `${e.message}` can render `null`.
 - **Fix:** Map each exception to the message that describes its real cause.
-- **Note:** The port bound at `lib/config.dart:166` (`uri.port > 65535`) is
+- **Note:** The port bound at `lib/config.dart:201` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
   rejects it.
@@ -148,6 +148,25 @@ matching Plane work item.
   discoverable in either the plan or the changelog.
 - **Fix:** Update the plan document to reference `Config.resolveApiBaseUrl()`, and
   add a `CHANGELOG.md` entry for the removed getters.
+
+## STORAGE-REFUSAL — a refused storage write stays effective in the session
+
+- **Plane:** IC-81
+- **Location:** `lib/config.dart:135` (`setApiBaseUrl`),
+  `lib/config.dart:172` (`clearApiBaseUrl`),
+  `lib/screens/settings_screen.dart:176` (`_resetToDefault`)
+- **Finding:** `shared_preferences` 2.5.6 updates its in-memory cache *before* the
+  platform call: `_setValue` writes `_preferenceCache[key]` and `remove` deletes
+  `_preferenceCache[key]` before the platform answers. A refused write therefore
+  left the rejected URL effective for the whole session while the UI reported
+  `Could not save`, and a refused removal left the override inactive while the
+  UI claimed it was "still in use". The platform may also restore a refused
+  removal after a restart, which Dart cannot prevent.
+- **Fix:** **Delivered by PR #30** — a refused write now rolls the in-memory
+  value back (`Config._rollbackStoredUrl`) and reports the refusal, and a
+  refused removal is reported as "not active now, but it may return after a
+  restart". The remaining platform-level gap (confirming a removal by
+  re-reading the persisted value) is tracked in IC-81.
 
 ## DEAD-CONFIG-BRANCHES — unreachable API-configuration branches and weak assertions
 
