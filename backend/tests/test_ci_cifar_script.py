@@ -19,6 +19,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -49,6 +50,7 @@ _STUB_CURL = """#!/usr/bin/env python3
 import json
 import os
 import sys
+import time
 
 args = sys.argv[1:]
 target = None
@@ -67,6 +69,11 @@ if fail_substring and fail_substring in url:
 
 if "fail" in url:
     sys.exit(22)
+
+if "slow" in url:
+    # A stalled transfer: the script has to abort it with its own timeout
+    # instead of holding the job for the whole budget.
+    time.sleep(30)
 
 if "corrupt" in url:
     with open(os.environ["CURL_CORRUPT_FILE"], "rb") as handle:
@@ -115,6 +122,7 @@ def _run_script(
     md5: str | None = None,
     sha256: str | None = None,
     cache_dir: Path | None = None,
+    timeout: int = 30,
 ):
     """Runs the download script with a stubbed curl.
 
@@ -122,7 +130,7 @@ def _run_script(
     default mirror order can be observed. ``md5``/``sha256`` override the
     pinned digests the script verifies against. ``cache_dir`` overrides the
     cache directory, so a test can point the script at a directory that does
-    not exist yet.
+    not exist yet. ``timeout`` is the per-attempt budget in seconds.
 
     Returns the completed process and the recorded curl calls.
     """
@@ -154,7 +162,7 @@ def _run_script(
             "CIFAR10_MD5": md5 or _md5(PAYLOAD),
             "CIFAR10_SHA256": sha256 or _sha256(PAYLOAD),
             "CIFAR10_ATTEMPTS": "2",
-            "CIFAR10_TIMEOUT": "30",
+            "CIFAR10_TIMEOUT": str(timeout),
         }
     )
     if urls is not None:
@@ -374,11 +382,16 @@ def _backend_job(name: str) -> dict:
     return jobs["python-backend"]
 
 
-def _step_by_name(job: dict, prefix: str) -> tuple[int, dict]:
+def _step_by_name(job: dict, name: str) -> tuple[int, dict]:
+    """Finds a step by its exact name.
+
+    The exact name is pinned: a renamed step must fail the suite instead of
+    silently changing which step the assertions cover.
+    """
     for index, step in enumerate(job["steps"]):
-        if str(step.get("name", "")).startswith(prefix):
+        if step.get("name") == name:
             return index, step
-    raise AssertionError(f"no step named {prefix!r}")
+    raise AssertionError(f"no step named {name!r}")
 
 
 def test_the_backend_job_has_a_120_minute_timeout() -> None:
@@ -402,9 +415,9 @@ def test_the_workflow_is_valid_yaml_with_the_cache_steps_in_order() -> None:
     for name in WORKFLOW_FILES:
         job = _backend_job(name)
 
-        restore_index, restore = _step_by_name(job, "Restore CIFAR-10")
+        restore_index, restore = _step_by_name(job, "Restore CIFAR-10 dataset cache")
         download_index, download = _step_by_name(job, "Download and verify CIFAR-10")
-        save_index, save = _step_by_name(job, "Save verified CIFAR-10")
+        save_index, save = _step_by_name(job, "Save verified CIFAR-10 dataset cache")
 
         assert (
             restore_index < download_index < save_index
@@ -426,6 +439,45 @@ def test_the_workflow_is_valid_yaml_with_the_cache_steps_in_order() -> None:
         assert save["if"].strip() == "success() && steps.cifar-cache.outputs.cache-hit != 'true'"
         assert save["with"]["path"] == CACHE_PATH
         assert save["with"]["key"] == CACHE_KEY
+
+
+def test_the_download_step_always_runs_and_always_fails_the_job() -> None:
+    """The download step must run on every job and must fail the job.
+
+    A conditional download would skip the verification of a restored
+    archive, which is the path that let a poisoned cache through. A
+    tolerated download failure would let the save step store an unverified
+    archive under the immutable cache key, which is how the cache poisoned
+    itself in the first place.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        _, download = _step_by_name(job, "Download and verify CIFAR-10")
+
+        assert "if" not in download, f"{name} can skip the CIFAR-10 download"
+        assert "continue-on-error" not in download, f"{name} ignores a failed CIFAR-10 download"
+
+
+def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> None:
+    """A stalled transfer must be aborted by the per-attempt timeout.
+
+    The throttled origin once kept a job running for 37 minutes without
+    delivering the archive, so the timeout that wraps the download has to
+    be applied - a pinned default value is not enough.
+    """
+    started = time.monotonic()
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/slow"],
+        timeout=1,
+    )
+    elapsed = time.monotonic() - started
+
+    assert process.returncode == 1
+    # Two attempts, each aborted after one second. Without the timeout
+    # wrapper the stalled transfer would hold the script for a minute.
+    assert elapsed < 15, f"the stalled download was not aborted ({elapsed:.1f} s)"
+    assert len(calls) == 2
 
 
 def test_the_script_pins_the_download_budget() -> None:
