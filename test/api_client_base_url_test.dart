@@ -279,6 +279,27 @@ void main() {
 
         expect(await apiClient.healthStatusCode(), isNull);
       });
+
+      test('returns null when the response raises an HttpException', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw HttpException('malformed response');
+          }),
+          baseUrl: 'http://http-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when the base URL cannot be parsed', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async => http.Response('{}', 200)),
+          // An unterminated IPv6 host makes Uri.parse throw.
+          baseUrl: 'http://[bad',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
     });
 
     group('error messages include the base URL', () {
@@ -501,7 +522,10 @@ void main() {
     });
 
     group('malformed JSON responses', () {
-      Future<void> expectInvalidJsonResponse(String body) async {
+      Future<void> expectInvalidJsonResponse(
+        String body, {
+        String? messageContains,
+      }) async {
         final mockClient = MockClient(
           (request) async => http.Response(body, 200),
         );
@@ -510,18 +534,17 @@ void main() {
           baseUrl: 'http://bad-json.example.com:8000',
         );
 
+        final messageParts = <Matcher>[
+          contains('Invalid response from'),
+          contains('http://bad-json.example.com:8000'),
+          if (messageContains != null) contains(messageContains),
+        ];
+
         await expectLater(
           apiClient.getModelInfo(),
           throwsA(
             isA<ApiException>()
-                .having(
-                  (e) => e.message,
-                  'message',
-                  allOf(
-                    contains('Invalid response from'),
-                    contains('http://bad-json.example.com:8000'),
-                  ),
-                )
+                .having((e) => e.message, 'message', allOf(messageParts))
                 .having((e) => e.statusCode, 'statusCode', 502),
           ),
         );
@@ -537,7 +560,13 @@ void main() {
       test(
         'a JSON array body produces an ApiException with status 502',
         () async {
-          await expectInvalidJsonResponse('[1,2]');
+          // The body is valid JSON but not a map, so the response-structure
+          // check reports it. This distinguishes it from the TypeError path,
+          // which reports an unexpected response shape.
+          await expectInvalidJsonResponse(
+            '[1,2]',
+            messageContains: 'Invalid JSON response',
+          );
         },
       );
 
