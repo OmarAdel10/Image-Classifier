@@ -398,7 +398,10 @@ void main() {
         final apiClient = ApiClient(
           client: mockClient,
           baseUrl: 'http://predict.example.com:8000',
-          timeout: const Duration(milliseconds: 100),
+          // The mock fails immediately, so the timeout only decides the
+          // outcome when the machine is heavily loaded. A short timeout made
+          // this test flaky (it raced the 408 path).
+          timeout: const Duration(seconds: 5),
         );
 
         // The multipart body is read from the real file system, which the
