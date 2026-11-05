@@ -132,18 +132,21 @@ class Config {
     } catch (_) {
       throw StateError('Could not store the API base URL.');
     }
+    // The value that is in use before the write, so the rollback can put it
+    // back if the platform cannot be read any more.
+    final previous = prefs.getString(apiBaseUrlPrefsKey);
     final bool stored;
     try {
       stored = await prefs.setString(apiBaseUrlPrefsKey, normalized);
     } catch (_) {
-      await _rollbackStoredUrl(prefs);
+      await _rollbackStoredUrl(prefs, previous);
       throw StateError('Could not store the API base URL.');
     }
     if (!stored) {
       // The platform refused the write. Reload the persisted state, so the
       // app keeps using the URL that is actually stored instead of the one
       // that was never saved.
-      await _rollbackStoredUrl(prefs);
+      await _rollbackStoredUrl(prefs, previous);
       throw StateError('Could not store the API base URL.');
     }
   }
@@ -156,12 +159,32 @@ class Config {
   /// cache from the platform, which restores the previously stored URL
   /// instead of deleting it: removing the key would throw away a working
   /// backend address the user configured earlier.
-  static Future<void> _rollbackStoredUrl(SharedPreferences prefs) async {
+  ///
+  /// When the platform cannot be read any more, the reload fails and the
+  /// cache would keep the refused URL. In that case [previous] is written
+  /// back, which restores the cache even when the platform refuses that
+  /// write as well, because `shared_preferences` updates the cache before it
+  /// calls the store.
+  static Future<void> _rollbackStoredUrl(
+    SharedPreferences prefs,
+    String? previous,
+  ) async {
     try {
       await prefs.reload();
+      return;
     } catch (_) {
-      // The platform is unreadable as well; the caller reports the storage
-      // failure and the session keeps whatever the cache holds.
+      // The platform is unreadable as well: fall through and put the
+      // previous value back into the cache.
+    }
+    try {
+      if (previous == null) {
+        await prefs.remove(apiBaseUrlPrefsKey);
+      } else {
+        await prefs.setString(apiBaseUrlPrefsKey, previous);
+      }
+    } catch (_) {
+      // The cache keeps the value it has; the caller reports the storage
+      // failure.
     }
   }
 
