@@ -226,6 +226,43 @@ void main() {
       expect(snackBar.action, isNull);
     });
 
+    testWidgets(
+      'replaces a previous image error snackbar instead of queueing',
+      (WidgetTester tester) async {
+        final imageFile = _createTempImageFile();
+        final pickedFile = _InMemoryXFile(
+          imageFile.path,
+          imageFile.readAsBytesSync(),
+        );
+        var validations = 0;
+        final imageService = MockImageService();
+        when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+        when(imageService.validateAndCompress(any)).thenAnswer((_) async {
+          validations++;
+          throw StateError(
+            validations == 1 ? 'first image failure' : 'second image failure',
+          );
+        });
+
+        await tester.pumpWidget(
+          _buildHomeScreen(
+            httpClient: MockClient((request) async => http.Response('{}', 200)),
+            imageService: imageService,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await _tapDropZoneAndSettle(tester);
+        await _tapDropZoneAndSettle(tester);
+
+        // The second image error must REPLACE the first snackbar
+        // (hideCurrentSnackBar), not queue behind it.
+        expect(find.textContaining('second image failure'), findsOneWidget);
+        expect(find.textContaining('first image failure'), findsNothing);
+        expect(find.byType(SnackBar), findsOneWidget);
+      },
+    );
+
     testWidgets('prediction errors offer a Settings action that navigates', (
       WidgetTester tester,
     ) async {
