@@ -6,7 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 import 'support/false_prefs_store.dart';
+import 'support/false_removing_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
+import 'support/throwing_write_prefs_store.dart';
 
 void main() {
   group('Config runtime API base URL', () {
@@ -346,6 +348,89 @@ void main() {
           ),
         );
       });
+
+      test('a refused write leaves no effective override behind', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://saved.example.com:9000'),
+          throwsA(isA<StateError>()),
+        );
+
+        // shared_preferences updates its in-memory cache before the platform
+        // write completes, so the refused value has to be rolled back.
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
+    group('setApiBaseUrl when the store write throws', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = ThrowingWritePrefsStore();
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('reports the failure as a storage error', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://saved.example.com:9000'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Could not store the API base URL.',
+            ),
+          ),
+        );
+      });
+
+      test('leaves no effective override behind', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://saved.example.com:9000'),
+          throwsA(isA<StateError>()),
+        );
+
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
+    group('clearApiBaseUrl when the platform refuses the removal', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = FalseRemovingPrefsStore({
+          'flutter.${Config.apiBaseUrlPrefsKey}':
+              'http://stored.example.com:1234',
+        });
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('reports the failure', () async {
+        expect(await Config.clearApiBaseUrl(), isFalse);
+      });
+
+      test('the stored URL is not active after the refused removal', () async {
+        expect(await Config.clearApiBaseUrl(), isFalse);
+
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
     });
 
     group('clearApiBaseUrl return value', () {
@@ -393,6 +478,24 @@ void main() {
         expect(
           prefs.getString(Config.apiBaseUrlPrefsKey),
           'http://saved.example.com:9000',
+        );
+      });
+
+      test('a pinned build stores nothing', () async {
+        await expectLater(
+          Config.setApiBaseUrl(
+            'http://saved.example.com:9000',
+            compileTimeOverride: 'http://compile.example.com:8000',
+          ),
+          throwsA(isA<StateError>()),
+        );
+
+        // A refused write must not leave a dormant redirect behind.
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
         );
       });
 
