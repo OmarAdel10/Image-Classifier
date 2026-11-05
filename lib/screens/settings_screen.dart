@@ -76,11 +76,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _statusMessage = null;
     });
 
-    // Capture the client before the async gap so no BuildContext is used
-    // after an await.
-    final httpClient = context.read<ApiClient>().client;
-
     try {
+      // Read the client inside the try so a missing provider is reported to
+      // the user instead of escaping the handler. No BuildContext is used
+      // after an await.
+      final httpClient = context.read<ApiClient>().client;
+
       // Probe the URL as typed, without disturbing the stored configuration.
       final probe = ApiClient(client: httpClient, baseUrl: url);
       final statusCode = await probe.healthStatusCode();
@@ -120,9 +121,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final override = widget.compileTimeOverride;
 
-    final apiClient = context.read<ApiClient>();
-
+    late final ApiClient apiClient;
     try {
+      // Read the client inside the try so a missing provider is reported to
+      // the user instead of escaping the handler.
+      apiClient = context.read<ApiClient>();
       await Config.setApiBaseUrl(url, compileTimeOverride: override);
     } catch (e) {
       if (!mounted) return;
@@ -142,7 +145,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _resetToDefault() async {
-    final apiClient = context.read<ApiClient>();
+    late final ApiClient apiClient;
+    try {
+      // Read the client inside the try so a missing provider is reported to
+      // the user instead of escaping the handler.
+      apiClient = context.read<ApiClient>();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _statusIsError = true;
+        _statusMessage = 'Could not reset the stored URL: $e';
+      });
+      return;
+    }
 
     final cleared = await Config.clearApiBaseUrl();
     apiClient.invalidateBaseUrlCache();

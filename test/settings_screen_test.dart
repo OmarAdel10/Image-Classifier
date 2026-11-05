@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 import 'support/delayed_prefs_store.dart';
+import 'support/false_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 
 /// A built settings screen together with the [ApiClient] instance it uses.
@@ -201,6 +202,29 @@ void main() {
       );
     });
 
+    testWidgets('probes the normalized URL', (WidgetTester tester) async {
+      final probed = <String>[];
+      final harness = _buildSettingsScreen(
+        MockClient((request) async {
+          probed.add(request.url.toString());
+          return http.Response('{}', 200);
+        }),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      // A trailing slash would produce '//health' if it were not stripped.
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000/',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Test Connection'));
+      await tester.pumpAndSettle();
+
+      expect(probed, ['http://saved.example.com:9000/health']);
+    });
+
     testWidgets('Save makes the live client use the new URL', (
       WidgetTester tester,
     ) async {
@@ -246,6 +270,84 @@ void main() {
 
       // The client must not keep using the cached (now cleared) URL.
       expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
+    });
+
+    testWidgets('reports a missing ApiClient provider instead of throwing', (
+      WidgetTester tester,
+    ) async {
+      // The shipped app always provides the client, but a missing provider
+      // must not escape the handler or leave the Test Connection button
+      // spinning forever.
+      await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+      await tester.pumpAndSettle();
+
+      // The status banner grows with the error text, so the buttons can be
+      // scrolled out of the lazily built list between the actions.
+      Future<void> tapButton(String label) async {
+        await tester.scrollUntilVisible(
+          find.text(label),
+          100,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.tap(_buttonWithLabel(label));
+        await tester.pumpAndSettle();
+      }
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000',
+      );
+      await tester.pump();
+
+      await tapButton('Test Connection');
+
+      expect(find.textContaining('Could not test'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      await tapButton('Save');
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+
+      await tapButton('Reset to Default');
+
+      expect(find.textContaining('Could not reset'), findsOneWidget);
+    });
+
+    testWidgets('reports a storage refusal instead of claiming success', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = FalseReturningPrefsStore();
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+      expect(find.textContaining('Saved. Using'), findsNothing);
+
+      await tester.scrollUntilVisible(
+        find.text('Reset to Default'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Could not clear the stored URL'),
+        findsOneWidget,
+      );
     });
 
     testWidgets('pinned build shows the banner and disables Save', (
