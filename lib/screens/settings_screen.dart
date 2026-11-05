@@ -68,6 +68,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return null;
   }
 
+  /// Renders an error for the user without the raw Dart exception wrapper.
+  ///
+  /// [StateError] and [ArgumentError] carry a message that is written for
+  /// humans, but `toString()` prefixes it with 'Bad state:' or
+  /// 'Invalid argument(s):'.
+  static String _describeError(Object error) {
+    if (error is StateError) return error.message;
+    if (error is ArgumentError) return error.message.toString();
+    return error.toString();
+  }
+
   Future<void> _testConnection() async {
     final url = Config.normalizeApiBaseUrl(_controller.text);
 
@@ -128,14 +139,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       apiClient = context.read<ApiClient>();
       await Config.setApiBaseUrl(url, compileTimeOverride: override);
     } catch (e) {
-      // A refused write is rolled back by Config, so the cached URL has to be
-      // dropped as well: the client must not keep using a URL that was never
-      // stored.
+      // Config restores the persisted URL after a refused write, so the
+      // client cache is dropped here as well: the next request has to
+      // re-resolve the URL that is actually stored.
       apiClient?.invalidateBaseUrlCache();
       if (!mounted) return;
       setState(() {
         _statusIsError = true;
-        _statusMessage = 'Could not save $url: $e';
+        _statusMessage = 'Could not save $url: ${_describeError(e)}';
       });
       return;
     }
