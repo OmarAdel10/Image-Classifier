@@ -14,6 +14,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 import 'support/delayed_prefs_store.dart';
 import 'support/false_prefs_store.dart';
 import 'support/false_removing_prefs_store.dart';
+import 'support/refusing_write_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 
 /// A built settings screen together with the [ApiClient] instance it uses.
@@ -342,6 +343,12 @@ void main() {
 
       expect(find.textContaining('Could not save'), findsOneWidget);
       expect(find.textContaining('Saved. Using'), findsNothing);
+      // The message names the cause instead of leaking the raw exception.
+      expect(
+        find.textContaining('Could not store the API base URL'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Bad state:'), findsNothing);
       // The refused URL must not be used by the app either.
       expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
 
@@ -358,6 +365,35 @@ void main() {
         findsOneWidget,
       );
       expect(find.textContaining('still in use'), findsNothing);
+    });
+
+    testWidgets('a refused save keeps the stored backend address in use', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = RefusingWritePrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
+      });
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://new.example.com:9000',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+      // The refused write must not throw away the backend address that is
+      // still stored.
+      expect(await harness.client.baseUrl, 'http://stored.example.com:1234');
     });
 
     testWidgets('a refused reset says the stored URL is not active now', (
