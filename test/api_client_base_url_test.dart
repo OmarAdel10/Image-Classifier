@@ -388,7 +388,9 @@ void main() {
         },
       );
 
-      test('predict names the URL when the socket fails', () async {
+      testWidgets('predict names the URL when the socket fails', (
+        WidgetTester tester,
+      ) async {
         final file = _createTempImageFile();
         final mockClient = MockClient((request) async {
           throw SocketException('Connection refused');
@@ -399,18 +401,22 @@ void main() {
           timeout: const Duration(milliseconds: 100),
         );
 
-        await expectLater(
-          apiClient.predict(file),
-          throwsA(
-            isA<ApiException>()
-                .having(
-                  (e) => e.message,
-                  'message',
-                  contains('http://predict.example.com:8000'),
-                )
-                .having((e) => e.statusCode, 'statusCode', 503),
-          ),
-        );
+        // The multipart body is read from the real file system, which the
+        // fake-async zone of a widget test would never complete.
+        await tester.runAsync(() async {
+          await expectLater(
+            apiClient.predict(file),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('http://predict.example.com:8000'),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 503),
+            ),
+          );
+        });
       });
 
       test(
