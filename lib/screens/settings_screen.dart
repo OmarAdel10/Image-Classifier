@@ -121,13 +121,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     final override = widget.compileTimeOverride;
 
-    late final ApiClient apiClient;
+    ApiClient? apiClient;
     try {
       // Read the client inside the try so a missing provider is reported to
       // the user instead of escaping the handler.
       apiClient = context.read<ApiClient>();
       await Config.setApiBaseUrl(url, compileTimeOverride: override);
     } catch (e) {
+      // A refused write is rolled back by Config, so the cached URL has to be
+      // dropped as well: the client must not keep using a URL that was never
+      // stored.
+      apiClient?.invalidateBaseUrlCache();
       if (!mounted) return;
       setState(() {
         _statusIsError = true;
@@ -165,7 +169,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!cleared) {
       setState(() {
         _statusIsError = true;
-        _statusMessage = 'Could not clear the stored URL — it is still in use.';
+        // The in-memory cache is cleared even when the platform refused the
+        // removal, so the stored URL is not active now - but the platform may
+        // still hold it and restore it after a restart.
+        _statusMessage =
+            'Could not remove the stored URL - it is not active now, '
+            'but it may return after a restart.';
       });
       return;
     }
