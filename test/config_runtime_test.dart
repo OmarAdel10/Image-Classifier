@@ -471,6 +471,40 @@ void main() {
       });
     });
 
+    group('setApiBaseUrl when the rollback fails and nothing was stored', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = ReloadThrowingPrefsStore({});
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('drops the refused URL', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://new.example.com:9000'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Could not store the API base URL.',
+            ),
+          ),
+        );
+
+        // Nothing was stored before, so the refused URL must not stay in
+        // effect: the rollback has to remove it from the in-memory cache.
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
     group('clearApiBaseUrl when the platform refuses the removal', () {
       setUp(() {
         SharedPreferencesStorePlatform.instance = FalseRemovingPrefsStore({
