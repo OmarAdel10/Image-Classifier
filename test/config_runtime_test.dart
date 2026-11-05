@@ -273,14 +273,17 @@ void main() {
         expect(await Config.clearApiBaseUrl(), isFalse);
       });
 
-      test('setApiBaseUrl throws StateError', () async {
+      test('setApiBaseUrl reports a storage failure as StateError', () async {
         await expectLater(
           Config.setApiBaseUrl('http://saved.example.com:9000'),
           throwsA(
             isA<StateError>().having(
               (e) => e.message,
               'message',
-              isNot(contains('Refusing to store a runtime API base URL')),
+              allOf(
+                contains('Could not store the API base URL'),
+                isNot(contains('Refusing to store a runtime API base URL')),
+              ),
             ),
           ),
         );
@@ -383,6 +386,16 @@ void main() {
         },
       );
 
+      test('stores the normalized URL', () async {
+        await Config.setApiBaseUrl('  http://saved.example.com:9000/  ');
+
+        final prefs = await SharedPreferences.getInstance();
+        expect(
+          prefs.getString(Config.apiBaseUrlPrefsKey),
+          'http://saved.example.com:9000',
+        );
+      });
+
       test('throws ArgumentError for an invalid URL', () async {
         await expectLater(
           Config.setApiBaseUrl('not a url'),
@@ -396,6 +409,22 @@ void main() {
         );
         await expectLater(
           Config.setApiBaseUrl('ftp://x'),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('must be a well-formed http/https URL'),
+            ),
+          ),
+        );
+      });
+
+      test('reports an invalid URL before the pinned-build refusal', () async {
+        await expectLater(
+          Config.setApiBaseUrl(
+            'not a url',
+            compileTimeOverride: 'http://compile.example.com:8000',
+          ),
           throwsA(
             isA<ArgumentError>().having(
               (e) => e.message,

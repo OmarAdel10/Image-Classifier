@@ -95,6 +95,8 @@ class Config {
   /// Pass `null`, an empty string, or whitespace to clear the override. The
   /// clear path runs before the pinned check, so a pinned build may still
   /// remove a stored override; it can never create one.
+  /// The URL is validated before the pinned check, so a malformed URL is
+  /// reported as malformed even in a pinned build.
   static Future<void> setApiBaseUrl(
     String? url, {
     String compileTimeOverride = compileTimeApiBaseUrl,
@@ -109,12 +111,6 @@ class Config {
       }
       return;
     }
-    if (compileTimeOverride.isNotEmpty) {
-      throw StateError(
-        'Refusing to store a runtime API base URL while '
-        '--dart-define=API_BASE_URL is set.',
-      );
-    }
     final normalized = normalizeApiBaseUrl(url);
     if (!isValidApiBaseUrl(normalized)) {
       throw ArgumentError(
@@ -122,7 +118,18 @@ class Config {
         'with a host and no query or fragment.',
       );
     }
-    final prefs = await SharedPreferences.getInstance();
+    if (compileTimeOverride.isNotEmpty) {
+      throw StateError(
+        'Refusing to store a runtime API base URL while '
+        '--dart-define=API_BASE_URL is set.',
+      );
+    }
+    final SharedPreferences prefs;
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (_) {
+      throw StateError('Could not store the API base URL.');
+    }
     final stored = await prefs.setString(apiBaseUrlPrefsKey, normalized);
     if (!stored) {
       throw StateError('Could not store the API base URL.');
