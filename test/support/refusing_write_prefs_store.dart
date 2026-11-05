@@ -20,6 +20,14 @@ class RefusingWritePrefsStore extends SharedPreferencesStorePlatform {
     return Map<String, Object>.of(_values);
   }
 
+  /// Changes a persisted value without going through the plugin cache.
+  ///
+  /// Models the platform state changing while the app is running, which is
+  /// what makes a cached base URL stale.
+  void setPersisted(String key, Object value) {
+    _values[key] = value;
+  }
+
   /// The write is refused and the stored value is left untouched.
   @override
   Future<bool> setValue(String valueType, String key, Object value) async {

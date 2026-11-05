@@ -396,6 +396,44 @@ void main() {
       expect(await harness.client.baseUrl, 'http://stored.example.com:1234');
     });
 
+    testWidgets('a refused save re-resolves the client from the store', (
+      WidgetTester tester,
+    ) async {
+      final store = RefusingWritePrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
+      });
+      SharedPreferencesStorePlatform.instance = store;
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      // Resolve the URL first, so the client caches it.
+      expect(await harness.client.baseUrl, 'http://stored.example.com:1234');
+
+      // The persisted address changes underneath the running app.
+      store.setPersisted(
+        'flutter.${Config.apiBaseUrlPrefsKey}',
+        'http://changed.example.com:9999',
+      );
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://new.example.com:9000',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+      // The client must drop its cached address and read the persisted one.
+      expect(await harness.client.baseUrl, 'http://changed.example.com:9999');
+    });
+
     testWidgets('a refused reset says the stored URL is not active now', (
       WidgetTester tester,
     ) async {

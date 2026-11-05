@@ -8,6 +8,7 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 import 'support/false_prefs_store.dart';
 import 'support/false_removing_prefs_store.dart';
 import 'support/refusing_write_prefs_store.dart';
+import 'support/reload_throwing_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 import 'support/throwing_write_prefs_store.dart';
 
@@ -431,6 +432,41 @@ void main() {
         expect(
           await Config.resolveApiBaseUrl(),
           Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
+    group('setApiBaseUrl when the rollback cannot read the store', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = ReloadThrowingPrefsStore({
+          'flutter.${Config.apiBaseUrlPrefsKey}':
+              'http://stored.example.com:1234',
+        });
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('reports the storage error and keeps the cached URL', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://new.example.com:9000'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Could not store the API base URL.',
+            ),
+          ),
+        );
+
+        // The rollback could not read the store, so the address that is
+        // still cached stays in use instead of being lost.
+        expect(
+          await Config.resolveApiBaseUrl(),
+          'http://stored.example.com:1234',
         );
       });
     });

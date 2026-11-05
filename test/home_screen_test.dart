@@ -51,7 +51,9 @@ Widget _buildHomeScreen({
 }) {
   final apiClient = ApiClient(
     client: httpClient,
-    timeout: const Duration(milliseconds: 100),
+    // A generous budget: a short timeout races the mocked failures under
+    // load, which made the error-path tests flaky.
+    timeout: const Duration(seconds: 5),
   );
   return MultiProvider(
     providers: [
