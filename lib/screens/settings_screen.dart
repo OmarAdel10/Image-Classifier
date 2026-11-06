@@ -70,12 +70,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// Renders an error for the user without the raw Dart exception wrapper.
   ///
-  /// [StateError] and [ArgumentError] carry a message that is written for
-  /// humans, but `toString()` prefixes it with 'Bad state:' or
-  /// 'Invalid argument(s):'.
+  /// [StateError] carries a message that is written for humans, but
+  /// `toString()` prefixes it with 'Bad state:'. Every other error keeps its
+  /// own `toString()`, which names the error type.
   static String _describeError(Object error) {
     if (error is StateError) return error.message;
-    if (error is ArgumentError) return error.message.toString();
     return error.toString();
   }
 
