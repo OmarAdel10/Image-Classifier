@@ -456,6 +456,37 @@ def test_one_attempt_is_enough_when_the_source_works(tmp_path: Path) -> None:
     assert len(calls) == 1
 
 
+def test_the_partial_download_is_purged_at_every_attempt_count(tmp_path: Path) -> None:
+    """The purge must use the configured attempt count, not a hard-coded two.
+
+    The partial download of an exhausted source is dropped so the next source
+    starts at byte 0. If the purge fired at a fixed count instead of the
+    configured one, the second source could resume on the bytes of the first
+    source and the archive would be spliced together.
+    """
+    for attempts in (1, 3):
+        work = tmp_path / f"attempts_{attempts}"
+        work.mkdir()
+        process, calls = _run_script(
+            work,
+            ["https://example.test/corrupt", "https://example.test/good"],
+            attempts=attempts,
+        )
+
+        assert process.returncode == 0, process.stdout + process.stderr
+        good_calls = [call for call in calls if call.url == "https://example.test/good"]
+        assert good_calls
+        # The second source starts at byte 0, whatever the attempt count is.
+        assert [call.size for call in good_calls] == [0]
+
+
+def test_the_purge_is_bound_to_the_configured_attempt_count() -> None:
+    """The purge condition must read the attempt count, not a literal."""
+    script_text = SCRIPT.read_text()
+
+    assert '-eq "$ATTEMPTS"' in script_text
+
+
 def test_the_pytest_step_reads_the_dataset_from_the_cache_directory() -> None:
     """The tests must use the directory the download script filled.
 
