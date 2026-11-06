@@ -113,14 +113,20 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:214`,
+- **Location:** `lib/services/api_client.dart:209`,
   `lib/services/api_client.dart:226`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
-  `Invalid response from ...` although it is a request-construction error, a
-  `MultipartFile.fromPath` `ArgumentError` is reported as
-  `Invalid backend address ...` although the file is missing, and
-  `${e.message}` can render `null`.
+  `Invalid response from ...` although it is a request-construction error, and
+  `${e.message}` can render `null`. A missing image file raises a
+  `PathNotFoundException` (an `IOException`), not an `ArgumentError`, so it was
+  reported as `Connection to ... failed` and the user was sent to look at the
+  backend instead of the image.
 - **Fix:** Map each exception to the message that describes its real cause.
+- **Delivered in PR #30:** a missing or unreadable image file is now reported
+  as `Could not read the image file: ...` (status 400) before the request is
+  sent, and an `ArgumentError` is reported as `Invalid request to ...` with a
+  null-safe message. The remaining part of the finding — the `FormatException`
+  arm of the request builder — stays open in IC-77.
 - **Note:** The port bound at `lib/config.dart:230` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
@@ -231,6 +237,9 @@ matching Plane work item.
   the path is not reachable today.
 - **Fix:** Move the read inside the guarded region, or read it with a type
   check that falls back to the documented `StateError`.
+- **Delivered in PR #30:** the read is guarded now, so a value of another type
+  falls back to "nothing was stored" instead of escaping as a `TypeError`. The
+  rollback then drops the refused URL, which is the safe outcome.
 
 ## CURL-RETRY-RANGE — curl's automatic retry is not byte-safe with -C -
 
