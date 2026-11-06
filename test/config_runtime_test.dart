@@ -643,6 +643,25 @@ void main() {
         );
       });
 
+      test(
+        'a stored value of another type does not escape as a TypeError',
+        () async {
+          // shared_preferences casts the cached value to a string, so a value
+          // of another type must not escape the documented error contract.
+          SharedPreferences.setMockInitialValues({
+            Config.apiBaseUrlPrefsKey: 42,
+          });
+          SharedPreferences.resetStatic();
+
+          await Config.setApiBaseUrl('http://saved.example.com:9000');
+
+          expect(
+            await Config.resolveApiBaseUrl(),
+            'http://saved.example.com:9000',
+          );
+        },
+      );
+
       test('a pinned build stores nothing', () async {
         await expectLater(
           Config.setApiBaseUrl(

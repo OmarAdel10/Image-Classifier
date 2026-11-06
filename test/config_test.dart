@@ -15,6 +15,15 @@ void main() {
       expect(Config.isValidApiBaseUrl('https://example.com/api/v1'), isTrue);
     });
 
+    test('accepts surrounding whitespace, a path and an IPv6 host', () {
+      // The validator trims, so whitespace around the URL is accepted.
+      expect(Config.isValidApiBaseUrl('  http://example.com  '), isTrue);
+      // A base path is accepted: the request paths are appended to it.
+      expect(Config.isValidApiBaseUrl('http://example.com/api'), isTrue);
+      // An IPv6 literal is a valid host.
+      expect(Config.isValidApiBaseUrl('http://[::1]:8000'), isTrue);
+    });
+
     test('rejects non-http scheme (URL injection guard, IC-60)', () {
       // The ports are explicit so the scheme check is the only reason these
       // are rejected: without a port the URL is already invalid because the
