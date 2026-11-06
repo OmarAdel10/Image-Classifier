@@ -121,7 +121,7 @@ matching Plane work item.
   `Invalid backend address ...` although the file is missing, and
   `${e.message}` can render `null`.
 - **Fix:** Map each exception to the message that describes its real cause.
-- **Note:** The port bound at `lib/config.dart:201` (`uri.port > 65535`) is
+- **Note:** The port bound at `lib/config.dart:230` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
   rejects it.
@@ -178,7 +178,7 @@ matching Plane work item.
 - **Location:** `lib/screens/settings_screen.dart` (save path),
   `lib/config.dart` (`validateStartupApiBaseUrl`),
   `lib/services/api_client.dart` (`healthStatusCode`)
-- **Finding:** Four branches cannot be reached from the shipped app: (1) the
+- **Finding:** Five branches cannot be reached from the shipped app: (1) the
   `compileTimeOverride` argument of the settings save path is unreachable
   because Save is disabled in a pinned build; (2) the normalisation inside
   `Config.validateStartupApiBaseUrl` is outcome-equivalent to the validation
@@ -188,10 +188,11 @@ matching Plane work item.
   errors (cross-ref IC-72); (4) the `ArgumentError` arm of the settings
   screen `_describeError` helper is unreachable because `_save` validates the
   URL with the same predicate before calling `Config`, so `Config` only ever
-  raises a `StateError` there. The last review also flagged weak assertions:
-  a
-  redundant whitespace-only URL case, a test that taps a disabled button, and
-  snackbar replace-versus-queue checks that rely on text finders only.
+  raises a `StateError` there; (5) the generic `error.toString()` fallback of
+  `_describeError` is unreachable for the same reason. The last review also
+  flagged weak assertions: a redundant whitespace-only URL case, a test that
+  taps a disabled button, and snackbar replace-versus-queue checks that rely
+  on text finders only.
 - **Fix:** Remove the dead branches or make them reachable, and tighten the
   flagged assertions.
 
@@ -230,3 +231,28 @@ matching Plane work item.
   the path is not reachable today.
 - **Fix:** Move the read inside the guarded region, or read it with a type
   check that falls back to the documented `StateError`.
+
+## CURL-RETRY-RANGE — curl's automatic retry is not byte-safe with -C -
+
+- **Plane:** IC-86
+- **Location:** `backend/scripts/fetch_cifar10.sh` (the `curl -fL -C - --retry 3
+  --retry-all-errors` call)
+- **Finding:** Some curl builds re-send bytes when an automatic retry follows a
+  partial transfer, so a resumed download may not be byte-exact. The archive
+  integrity is unaffected: the pinned md5 and sha256 reject a corrupt file and
+  the per-source purge discards it. The impact is a wasted download budget,
+  never a wrong archive.
+- **Fix:** Download the remaining range in explicit chunks, or drop the
+  automatic retries and rely on the per-source attempt loop, which already
+  resumes from the partial file.
+
+## CURL-TIMEOUT-KILL — the per-attempt timeout waits for a stubborn child
+
+- **Plane:** IC-85
+- **Location:** `backend/scripts/fetch_cifar10.sh` (the `timeout "$TIMEOUT"`
+  wrapper)
+- **Finding:** `timeout` without `--kill-after` keeps waiting for a child that
+  ignores `SIGTERM`. `curl` handles `SIGTERM`, so the practical risk is low,
+  but a wedged child would hold the job past its budget.
+- **Fix:** Add `--kill-after` to the `timeout` call so the attempt is bounded
+  even if the child does not exit on `SIGTERM`.
