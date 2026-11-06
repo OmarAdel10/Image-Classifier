@@ -19,7 +19,6 @@ import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -89,6 +88,32 @@ with open(target, "ab" if resume else "wb") as handle:
 """
 
 
+# A shell stub for the stalled-transfer test. It starts in milliseconds, so
+# the per-attempt timeout cannot race the interpreter start-up, and it records
+# whether the transfer was killed or ran to completion.
+_STUB_CURL_SHELL = """#!/bin/sh
+url=""
+out=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then
+    out="$arg"
+  fi
+  prev="$arg"
+  url="$arg"
+done
+size=0
+if [ -n "$out" ] && [ -f "$out" ]; then
+  size=$(wc -c < "$out")
+fi
+printf '{"url": "%s", "size": %s, "argv": []}\\n' "$url" "$size" >> "$CURL_LOG"
+trap 'printf "killed\\n" >> "$CURL_KILLED_LOG"; exit 143' TERM
+# The transfer stalls. Without the per-attempt timeout this runs for a minute.
+sleep 60 >/dev/null 2>&1
+printf "done\\n" >> "$CURL_DONE_LOG"
+"""
+
+
 class CurlCall(NamedTuple):
     """One recorded ``curl`` invocation."""
 
@@ -108,9 +133,9 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _write_stub_curl(bin_dir: Path) -> None:
+def _write_stub_curl(bin_dir: Path, body: str = _STUB_CURL) -> None:
     stub = bin_dir / "curl"
-    stub.write_text(_STUB_CURL)
+    stub.write_text(body)
     stub.chmod(0o755)
 
 
@@ -123,6 +148,7 @@ def _run_script(
     sha256: str | None = None,
     cache_dir: Path | None = None,
     timeout: int = 30,
+    stub: str = _STUB_CURL,
 ):
     """Runs the download script with a stubbed curl.
 
@@ -130,15 +156,19 @@ def _run_script(
     default mirror order can be observed. ``md5``/``sha256`` override the
     pinned digests the script verifies against. ``cache_dir`` overrides the
     cache directory, so a test can point the script at a directory that does
-    not exist yet. ``timeout`` is the per-attempt budget in seconds.
+    not exist yet. ``timeout`` is the per-attempt budget in seconds. ``stub``
+    replaces the stubbed curl, so a test can use a stub that starts faster
+    than the Python one.
 
     Returns the completed process and the recorded curl calls.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
-    _write_stub_curl(bin_dir)
+    _write_stub_curl(bin_dir, stub)
 
     log_path = tmp_path / "curl.log"
+    killed_path = tmp_path / "curl.killed.log"
+    done_path = tmp_path / "curl.done.log"
     payload_file = tmp_path / "payload.bin"
     payload_file.write_bytes(PAYLOAD)
     corrupt_file = tmp_path / "corrupt.bin"
@@ -157,6 +187,8 @@ def _run_script(
         {
             "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
             "CURL_LOG": str(log_path),
+            "CURL_KILLED_LOG": str(killed_path),
+            "CURL_DONE_LOG": str(done_path),
             "CURL_PAYLOAD_FILE": str(payload_file),
             "CURL_CORRUPT_FILE": str(corrupt_file),
             "CIFAR10_MD5": md5 or _md5(PAYLOAD),
@@ -465,19 +497,29 @@ def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> Non
     delivering the archive, so the timeout that wraps the download has to
     be applied - a pinned default value is not enough.
     """
-    started = time.monotonic()
     process, calls = _run_script(
         tmp_path,
         ["https://example.test/slow"],
-        timeout=1,
+        timeout=2,
+        # The shell stub starts in milliseconds, so the timeout cannot race
+        # the start-up of the stub itself.
+        stub=_STUB_CURL_SHELL,
     )
-    elapsed = time.monotonic() - started
 
     assert process.returncode == 1
-    # Two attempts, each aborted after one second. Without the timeout
-    # wrapper the stalled transfer would hold the script for a minute.
-    assert elapsed < 15, f"the stalled download was not aborted ({elapsed:.1f} s)"
+    assert "::error::CIFAR-10 archive could not be downloaded and verified." in (process.stdout)
+    # Two attempts, each aborted by the per-attempt timeout.
     assert len(calls) == 2
+
+    killed_path = tmp_path / "curl.killed.log"
+    done_path = tmp_path / "curl.done.log"
+    killed = killed_path.read_text() if killed_path.exists() else ""
+    done = done_path.read_text() if done_path.exists() else ""
+    # The stub recorded that it was killed in both attempts and never that it
+    # finished: the timeout interrupted the transfer instead of the transfer
+    # running to completion on its own.
+    assert killed.count("killed") == 2
+    assert done == ""
 
 
 def test_the_script_pins_the_download_budget() -> None:
