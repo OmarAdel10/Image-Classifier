@@ -133,8 +133,15 @@ class Config {
       throw StateError('Could not store the API base URL.');
     }
     // The value that is in use before the write, so the rollback can put it
-    // back if the platform cannot be read any more.
-    final previous = prefs.getString(apiBaseUrlPrefsKey);
+    // back if the platform cannot be read any more. The read is guarded:
+    // shared_preferences casts the cached value to a string, so a value of
+    // another type must not escape as a raw TypeError.
+    String? previous;
+    try {
+      previous = prefs.getString(apiBaseUrlPrefsKey);
+    } catch (_) {
+      previous = null;
+    }
     final bool stored;
     try {
       stored = await prefs.setString(apiBaseUrlPrefsKey, normalized);
