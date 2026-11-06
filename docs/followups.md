@@ -184,7 +184,7 @@ matching Plane work item.
 - **Location:** `lib/screens/settings_screen.dart` (save path),
   `lib/config.dart` (`validateStartupApiBaseUrl`),
   `lib/services/api_client.dart` (`healthStatusCode`)
-- **Finding:** Five branches cannot be reached from the shipped app: (1) the
+- **Finding:** Four branches cannot be reached from the shipped app: (1) the
   `compileTimeOverride` argument of the settings save path is unreachable
   because Save is disabled in a pinned build; (2) the normalisation inside
   `Config.validateStartupApiBaseUrl` is outcome-equivalent to the validation
@@ -192,10 +192,13 @@ matching Plane work item.
   slash does not affect validity; (3) the `ApiException` arm in the settings
   screen catch is unreachable because `healthStatusCode` swallows transport
   errors (cross-ref IC-72); (4) the `ArgumentError` arm of the settings
-  screen `_describeError` helper is unreachable because `_save` validates the
+  screen `_describeError` helper was unreachable because `_save` validates the
   URL with the same predicate before calling `Config`, so `Config` only ever
-  raises a `StateError` there; (5) the generic `error.toString()` fallback of
-  `_describeError` is unreachable for the same reason. The last review also
+  raises a `StateError` there — PR #30 removed that arm. The generic
+  `error.toString()` fallback of `_describeError` is **reachable**: the
+  `ApiClient` provider read now happens inside the guarded `try`, so a missing
+  provider raises a `ProviderNotFoundException` that reaches the fallback, and
+  a test pins the error type in the message. The last review also
   flagged weak assertions: a redundant whitespace-only URL case, a test that
   taps a disabled button, and snackbar replace-versus-queue checks that rely
   on text finders only.
