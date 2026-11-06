@@ -114,9 +114,21 @@ class ApiClient {
   /// Classifies an image and returns ranked predictions.
   Future<PredictionResponse> predict(File imageFile) async {
     final url = await baseUrl;
+    // The file is read before the request is sent, so a missing or
+    // unreadable image is reported as a file problem instead of being
+    // mistaken for a connection failure.
+    final http.MultipartFile upload;
+    try {
+      upload = await http.MultipartFile.fromPath('file', imageFile.path);
+    } on FileSystemException catch (e) {
+      throw ApiException(
+        message: 'Could not read the image file: ${e.message}',
+        statusCode: 400,
+      );
+    }
     return _handleRequest(url, () async {
       final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
-        ..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
+        ..files.add(upload);
 
       final streamedResponse = await client.send(request).timeout(_timeout);
       final response = await http.Response.fromStream(streamedResponse);
@@ -224,8 +236,12 @@ class ApiClient {
         statusCode: 502,
       );
     } on ArgumentError catch (e) {
+      // The address itself is validated before the request, so an
+      // ArgumentError here comes from the request, not from the URL.
       throw ApiException(
-        message: 'Invalid backend address $url: ${e.message}',
+        message:
+            'Invalid request to $url: '
+            '${e.message?.toString() ?? 'invalid argument'}',
         statusCode: 502,
       );
     }
