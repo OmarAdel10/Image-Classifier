@@ -183,8 +183,10 @@ class Config {
         await prefs.setString(apiBaseUrlPrefsKey, previous);
       }
     } catch (_) {
-      // The cache keeps the value it has; the caller reports the storage
-      // failure.
+      // The write-back failed as well. `shared_preferences` updates its
+      // cache before it calls the store, so the cache already holds the
+      // restored address (or no address at all); the caller reports the
+      // storage failure.
     }
   }
 

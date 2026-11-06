@@ -9,6 +9,7 @@ import 'support/false_prefs_store.dart';
 import 'support/false_removing_prefs_store.dart';
 import 'support/refusing_write_prefs_store.dart';
 import 'support/reload_throwing_prefs_store.dart';
+import 'support/throwing_write_back_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 import 'support/throwing_write_prefs_store.dart';
 
@@ -501,6 +502,67 @@ void main() {
         expect(
           await Config.resolveApiBaseUrl(),
           Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
+    group('setApiBaseUrl when the rollback cannot write the value back', () {
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      void installStore(Map<String, Object> values) {
+        SharedPreferencesStorePlatform.instance = ThrowingWriteBackPrefsStore(
+          values,
+        );
+        SharedPreferences.resetStatic();
+      }
+
+      test('drops the refused URL when nothing was stored', () async {
+        installStore({});
+
+        await expectLater(
+          Config.setApiBaseUrl('http://new.example.com:9000'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Could not store the API base URL.',
+            ),
+          ),
+        );
+
+        // The write-back failed as well, so the rollback cannot restore
+        // anything. The refused URL must still not stay in effect.
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+
+      test('keeps the previously stored URL', () async {
+        installStore({
+          'flutter.${Config.apiBaseUrlPrefsKey}':
+              'http://stored.example.com:1234',
+        });
+
+        await expectLater(
+          Config.setApiBaseUrl('http://new.example.com:9000'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              'Could not store the API base URL.',
+            ),
+          ),
+        );
+
+        // The working backend address that was configured earlier survives a
+        // refused save.
+        expect(
+          await Config.resolveApiBaseUrl(),
+          'http://stored.example.com:1234',
         );
       });
     });
