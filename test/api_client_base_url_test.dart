@@ -495,6 +495,10 @@ void main() {
                     allOf(
                       contains('http://arg-error.example.com:8000'),
                       contains('bad address'),
+                      // The address is validated before the request, so the
+                      // message must not blame the backend address.
+                      isNot(contains('Invalid backend address')),
+                      isNot(contains('null')),
                     ),
                   )
                   .having((e) => e.statusCode, 'statusCode', 502),
@@ -502,6 +506,64 @@ void main() {
           );
         },
       );
+
+      test(
+        'an ArgumentError without a message is reported without null',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw ArgumentError();
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://arg-error.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('invalid argument'),
+                      isNot(contains('null')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test('a missing image file is reported as a file problem', () async {
+        final mockClient = MockClient((request) async {
+          return http.Response('{}', 200);
+        });
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://predict.example.com:8000',
+        );
+
+        await expectLater(
+          apiClient.predict(
+            File('${Directory.systemTemp.path}/missing-image-file.png'),
+          ),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the image file'),
+                    // A missing file is not a connection problem.
+                    isNot(contains('Connection to')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 400),
+          ),
+        );
+      });
 
       test(
         'predictBytes names the URL when the client throws a ClientException',
