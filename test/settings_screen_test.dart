@@ -315,6 +315,9 @@ void main() {
       await tapButton('Save');
 
       expect(find.textContaining('Could not save'), findsOneWidget);
+      // The generic error arm must name the error that caused it, so a
+      // missing provider is not reported as an anonymous failure.
+      expect(find.textContaining('Provider<ApiClient>'), findsOneWidget);
 
       await tapButton('Reset to Default');
 
