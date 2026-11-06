@@ -148,6 +148,7 @@ def _run_script(
     sha256: str | None = None,
     cache_dir: Path | None = None,
     timeout: int = 30,
+    attempts: int = 2,
     stub: str = _STUB_CURL,
 ):
     """Runs the download script with a stubbed curl.
@@ -193,7 +194,7 @@ def _run_script(
             "CURL_CORRUPT_FILE": str(corrupt_file),
             "CIFAR10_MD5": md5 or _md5(PAYLOAD),
             "CIFAR10_SHA256": sha256 or _sha256(PAYLOAD),
-            "CIFAR10_ATTEMPTS": "2",
+            "CIFAR10_ATTEMPTS": str(attempts),
             "CIFAR10_TIMEOUT": str(timeout),
         }
     )
@@ -424,6 +425,70 @@ def _step_by_name(job: dict, name: str) -> tuple[int, dict]:
         if step.get("name") == name:
             return index, step
     raise AssertionError(f"no step named {name!r}")
+
+
+def test_the_attempt_count_is_honoured(tmp_path: Path) -> None:
+    """The per-source attempt count comes from the environment.
+
+    The default is only pinned by a regex over the script source, so the
+    loop itself has to be observed: a source that keeps failing must be
+    tried the configured number of times.
+    """
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/corrupt"],
+        attempts=3,
+    )
+
+    assert process.returncode == 1
+    assert len(calls) == 3
+
+
+def test_one_attempt_is_enough_when_the_source_works(tmp_path: Path) -> None:
+    """A working source must not be retried."""
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/good"],
+        attempts=1,
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert len(calls) == 1
+
+
+def test_the_pytest_step_reads_the_dataset_from_the_cache_directory() -> None:
+    """The tests must use the directory the download script filled.
+
+    If the two paths drift apart, the dataset is downloaded again into a
+    different directory: the exact failure this branch fixes, but silent.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        _, download = _step_by_name(job, "Download and verify CIFAR-10")
+        _, pytest_step = _step_by_name(job, "Run tests (pytest)")
+        assert CACHE_PATH in download["run"], f"{name} downloads elsewhere"
+        assert (
+            pytest_step["env"]["CNN_TEST_DATA_DIR"] == CACHE_PATH
+        ), f"{name} reads the dataset from another directory"
+
+
+def test_the_cache_actions_are_pinned_to_a_commit_sha() -> None:
+    """The cache actions must be pinned, and both must use the same commit."""
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        _, restore = _step_by_name(job, "Restore CIFAR-10 dataset cache")
+        _, save = _step_by_name(job, "Save verified CIFAR-10 dataset cache")
+
+        restore_ref = restore["uses"]
+        save_ref = save["uses"]
+        for ref in (restore_ref, save_ref):
+            assert re.fullmatch(
+                r"actions/cache/(restore|save)@[0-9a-f]{40}", ref
+            ), f"{name} does not pin {ref} to a commit SHA"
+
+        assert (
+            restore_ref.split("@", 1)[1] == save_ref.split("@", 1)[1]
+        ), f"{name} restores and saves with different commits"
 
 
 def test_the_backend_job_has_a_120_minute_timeout() -> None:
