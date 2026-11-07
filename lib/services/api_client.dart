@@ -116,8 +116,9 @@ class ApiClient {
     final url = await baseUrl;
     // The file size is resolved before the request is sent, so a missing
     // image file is reported as a file problem instead of being mistaken for
-    // a connection failure. A file that exists but cannot be read fails only
-    // while the request body is streamed, and is reported as an I/O error.
+    // a connection failure. A file that exists but cannot be read fails while
+    // the request body is streamed; that failure is reported as a file
+    // problem too, so the backend is never blamed for it.
     final http.MultipartFile upload;
     try {
       upload = await http.MultipartFile.fromPath('file', imageFile.path);
@@ -131,7 +132,18 @@ class ApiClient {
       final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
         ..files.add(upload);
 
-      final streamedResponse = await client.send(request).timeout(_timeout);
+      final http.StreamedResponse streamedResponse;
+      try {
+        streamedResponse = await client.send(request).timeout(_timeout);
+      } on FileSystemException catch (e) {
+        // The file passed the size check but could not be read while the
+        // body was streamed. That is a problem with the local file, not with
+        // the connection to the backend.
+        throw ApiException(
+          message: 'Could not read the image file: ${e.message}',
+          statusCode: 400,
+        );
+      }
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode == 200) {

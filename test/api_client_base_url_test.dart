@@ -467,7 +467,12 @@ void main() {
                 .having(
                   (e) => e.message,
                   'message',
-                  contains('http://io-error.example.com:8000'),
+                  allOf(
+                    contains(
+                      'Connection to http://io-error.example.com:8000 failed:',
+                    ),
+                    contains('disk error'),
+                  ),
                 )
                 .having((e) => e.statusCode, 'statusCode', 503),
           ),

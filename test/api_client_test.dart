@@ -37,6 +37,23 @@ File _createTempImageFile() {
   return file;
 }
 
+/// Deletes the image file before the request body is streamed.
+///
+/// This reproduces the race between the size check that runs before the
+/// request and the upload that reads the file while the request is sent.
+class _DeletingClient extends http.BaseClient {
+  _DeletingClient(this.file);
+
+  final File file;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    file.deleteSync();
+    await request.finalize().toBytes();
+    return http.StreamedResponse(const Stream<List<int>>.empty(), 200);
+  }
+}
+
 void main() {
   group('ApiClient', () {
     late MockClient mockClient;
@@ -272,7 +289,18 @@ void main() {
       });
       apiClient = ApiClient(client: mockClient);
 
-      expect(() => apiClient.predictXFile(xFile), throwsA(isA<ApiException>()));
+      await expectLater(
+        apiClient.predictXFile(xFile),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.statusCode, 'statusCode', 400)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('file must be an image'),
+              ),
+        ),
+      );
     });
 
     test('predict throws ApiException on 413', () async {
@@ -282,7 +310,18 @@ void main() {
       });
       apiClient = ApiClient(client: mockClient);
 
-      expect(() => apiClient.predictXFile(xFile), throwsA(isA<ApiException>()));
+      await expectLater(
+        apiClient.predictXFile(xFile),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.statusCode, 'statusCode', 413)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('image file too large'),
+              ),
+        ),
+      );
     });
 
     test('predict throws ApiException on 500', () async {
@@ -292,18 +331,41 @@ void main() {
       });
       apiClient = ApiClient(client: mockClient);
 
-      expect(() => apiClient.predictXFile(xFile), throwsA(isA<ApiException>()));
+      await expectLater(
+        apiClient.predictXFile(xFile),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.statusCode, 'statusCode', 500)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('model inference failed'),
+              ),
+        ),
+      );
     });
 
     test('predict throws ApiException on timeout', () async {
       final xFile = XFile(_createTempImageFile().path);
       mockClient = MockClient((request) async {
-        await Future.delayed(const Duration(seconds: 35));
+        await Future.delayed(const Duration(seconds: 1));
         return http.Response('{}', 200);
       });
-      apiClient = ApiClient(client: mockClient);
+      // A short timeout keeps the test fast and stops the pending response
+      // from deciding the outcome of a later test.
+      apiClient = ApiClient(
+        client: mockClient,
+        timeout: const Duration(milliseconds: 50),
+      );
 
-      expect(() => apiClient.predictXFile(xFile), throwsA(isA<ApiException>()));
+      await expectLater(
+        apiClient.predictXFile(xFile),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.statusCode, 'statusCode', 408)
+              .having((e) => e.message, 'message', contains('timed out')),
+        ),
+      );
     });
 
     test('predict throws ApiException on network error', () async {
@@ -313,7 +375,21 @@ void main() {
       });
       apiClient = ApiClient(client: mockClient);
 
-      expect(() => apiClient.predictXFile(xFile), throwsA(isA<ApiException>()));
+      await expectLater(
+        apiClient.predictXFile(xFile),
+        throwsA(
+          isA<ApiException>()
+              .having((e) => e.statusCode, 'statusCode', 503)
+              .having(
+                (e) => e.message,
+                'message',
+                allOf(
+                  contains('Cannot reach'),
+                  isNot(contains('Connection to')),
+                ),
+              ),
+        ),
+      );
     });
 
     group('predictBytes (web)', () {
@@ -385,9 +461,17 @@ void main() {
         });
         apiClient = ApiClient(client: mockClient);
 
-        expect(
-          () => apiClient.predictBytes(bytes, 'test.png'),
-          throwsA(isA<ApiException>()),
+        await expectLater(
+          apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 400)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('file must be an image'),
+                ),
+          ),
         );
       });
 
@@ -398,9 +482,17 @@ void main() {
         });
         apiClient = ApiClient(client: mockClient);
 
-        expect(
-          () => apiClient.predictBytes(bytes, 'test.png'),
-          throwsA(isA<ApiException>()),
+        await expectLater(
+          apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 413)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('image file too large'),
+                ),
+          ),
         );
       });
 
@@ -411,23 +503,38 @@ void main() {
         });
         apiClient = ApiClient(client: mockClient);
 
-        expect(
-          () => apiClient.predictBytes(bytes, 'test.png'),
-          throwsA(isA<ApiException>()),
+        await expectLater(
+          apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 500)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('model inference failed'),
+                ),
+          ),
         );
       });
 
       test('predictBytes throws ApiException on timeout', () async {
         final bytes = Uint8List.fromList([0x00]);
         mockClient = MockClient((request) async {
-          await Future.delayed(const Duration(seconds: 35));
+          await Future.delayed(const Duration(seconds: 1));
           return http.Response('{}', 200);
         });
-        apiClient = ApiClient(client: mockClient);
+        apiClient = ApiClient(
+          client: mockClient,
+          timeout: const Duration(milliseconds: 50),
+        );
 
-        expect(
-          () => apiClient.predictBytes(bytes, 'test.png'),
-          throwsA(isA<ApiException>()),
+        await expectLater(
+          apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 408)
+                .having((e) => e.message, 'message', contains('timed out')),
+          ),
         );
       });
 
@@ -438,9 +545,112 @@ void main() {
         });
         apiClient = ApiClient(client: mockClient);
 
-        expect(
-          () => apiClient.predictBytes(bytes, 'test.png'),
-          throwsA(isA<ApiException>()),
+        await expectLater(
+          apiClient.predictBytes(bytes, 'test.png'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 503)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Cannot reach'),
+                    isNot(contains('Connection to')),
+                  ),
+                ),
+          ),
+        );
+      });
+    });
+
+    group('image file read failures', () {
+      test('an unreadable image file is reported as a file problem', () async {
+        final file = _createTempImageFile();
+        Process.runSync('chmod', ['000', file.path]);
+        addTearDown(() {
+          Process.runSync('chmod', ['600', file.path]);
+        });
+
+        var stillReadable = true;
+        try {
+          file.openSync().closeSync();
+        } on FileSystemException {
+          stillReadable = false;
+        }
+        if (stillReadable) {
+          markTestSkipped('the current user can read a mode 000 file');
+          return;
+        }
+
+        final mockClient = MockClient((request) async {
+          return http.Response('{}', 200);
+        });
+        final apiClient = ApiClient(client: mockClient);
+
+        await expectLater(
+          apiClient.predict(file),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the image file'),
+                    // A file that cannot be read is not a connection problem.
+                    isNot(contains('Connection to')),
+                    isNot(contains('Cannot reach')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 400),
+          ),
+        );
+      });
+
+      test(
+        'an image file removed after the size check is a file problem',
+        () async {
+          final file = _createTempImageFile();
+          final client = _DeletingClient(file);
+          final apiClient = ApiClient(client: client);
+
+          await expectLater(
+            apiClient.predict(file),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the image file'),
+                      isNot(contains('Connection to')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 400),
+            ),
+          );
+        },
+      );
+
+      test('an unusable path is reported as a file problem', () async {
+        final mockClient = MockClient((request) async {
+          return http.Response('{}', 200);
+        });
+        final apiClient = ApiClient(client: mockClient);
+
+        await expectLater(
+          apiClient.predictXFile(XFile('')),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the image file'),
+                    isNot(contains('Connection to')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 400),
+          ),
         );
       });
     });
