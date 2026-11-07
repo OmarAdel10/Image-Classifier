@@ -26,17 +26,18 @@ matching Plane work item.
 ## SETTINGS-DEAD-BRANCH — unreachable ApiException arm in _testConnection banner
 
 - **Plane:** IC-72
-- **Location:** `lib/screens/settings_screen.dart:120`
-- **Finding:** `e is ApiException ? e.message : e` — the `ApiException` arm is dead:
-  `healthStatusCode()` catches everything and returns null, so it never throws
-  `ApiException` here.
-- **Fix:** Simplify to `$e`, or wire the arm if `healthStatusCode` ever starts
-  throwing `ApiException`.
+- **Location:** `lib/screens/settings_screen.dart:114` (`_testConnection` catch)
+- **Finding:** `e is ApiException ? e.message : e` — the `ApiException` arm was
+  dead: `healthStatusCode()` reports an unreachable backend as a null status
+  code and never throws `ApiException` here.
+- **Fix:** **Delivered by PR #30** — the catch renders the failure with the
+  shared `_describeError` helper, so the unreachable arm is gone. A test pins
+  the message of an unexpected probe failure.
 
 ## ERROR-BODY — _parseErrorMessage reports the raw body, not the status code
 
 - **Plane:** IC-68
-- **Location:** `lib/services/api_client.dart:260`
+- **Location:** `lib/services/api_client.dart:276`
 - **Finding:** The backend error body is shown verbatim to the user instead of the
   HTTP status code, so a proxy or HTML error page leaks through the message.
 - **Fix:** Report the response status code and keep the body only for structured
@@ -113,8 +114,9 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:209`,
-  `lib/services/api_client.dart:226`
+- **Location:** `lib/services/api_client.dart:221`,
+  `lib/services/api_client.dart:226`,
+  `lib/services/api_client.dart:238`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -122,12 +124,14 @@ matching Plane work item.
   reported as `Connection to ... failed` and the user was sent to look at the
   backend instead of the image.
 - **Fix:** Map each exception to the message that describes its real cause.
-- **Delivered in PR #30:** a missing or unreadable image file is now reported
-  as `Could not read the image file: ...` (status 400) before the request is
+- **Delivered in PR #30:** a missing image file is now reported as
+  `Could not read the image file: ...` (status 400) before the request is
   sent, and an `ArgumentError` is reported as `Invalid request to ...` with a
-  null-safe message. The remaining part of the finding — the `FormatException`
-  arm of the request builder — stays open in IC-77.
-- **Note:** The port bound at `lib/config.dart:230` (`uri.port > 65535`) is
+  null-safe message. A file that exists but cannot be read only fails while
+  the request body is streamed, so it is still reported as an I/O error. The
+  remaining part of the finding — the `FormatException` arm of the request
+  builder — stays open in IC-77.
+- **Note:** The port bound at `lib/config.dart:239` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
   rejects it.
@@ -135,12 +139,11 @@ matching Plane work item.
 ## README-PINNED — stale pinned-build documentation
 
 - **Plane:** IC-78
-- **Location:** `README.md:141-143`, `docs/followups.md` (SETTINGS-DEAD-BRANCH)
+- **Location:** `README.md:141-143`
 - **Finding:** The README still says the runtime override is ignored when a
   compile-time override is present, but a pinned build can no longer create one
-  (Save is disabled and `Config` throws), and the `SETTINGS-DEAD-BRANCH` entry
-  still describes the old `healthStatusCode` contract.
-- **Fix:** Document the pinned-build behaviour and refresh the stale rationale.
+  (Save is disabled and `Config` throws).
+- **Fix:** Document the pinned-build behaviour.
 
 ## DOC-DRIFT — stale Config.apiBaseUrl references and empty CHANGELOG
 
@@ -158,10 +161,10 @@ matching Plane work item.
 ## STORAGE-REFUSAL — shared_preferences caches a refused write
 
 - **Plane:** IC-81
-- **Location:** `lib/config.dart:140` (`setApiBaseUrl`),
-  `lib/config.dart:168` (`_rollbackStoredUrl`),
-  `lib/config.dart:201` (`clearApiBaseUrl`),
-  `lib/screens/settings_screen.dart:187` (`_resetToDefault`)
+- **Location:** `lib/config.dart:102` (`setApiBaseUrl`),
+  `lib/config.dart:175` (`_rollbackStoredUrl`),
+  `lib/config.dart:210` (`clearApiBaseUrl`),
+  `lib/screens/settings_screen.dart:188` (`_resetToDefault`)
 - **Finding:** `shared_preferences` 2.5.6 updates its in-memory cache *before* the
   platform call: `_setValue` writes `_preferenceCache[key]` and `remove` deletes
   `_preferenceCache[key]` before the platform answers. A refused write therefore
@@ -190,8 +193,9 @@ matching Plane work item.
   `Config.validateStartupApiBaseUrl` is outcome-equivalent to the validation
   that follows it, because `isValidApiBaseUrl` already trims and a trailing
   slash does not affect validity; (3) the `ApiException` arm in the settings
-  screen catch is unreachable because `healthStatusCode` swallows transport
-  errors (cross-ref IC-72); (4) the `ArgumentError` arm of the settings
+  screen catch was unreachable because `healthStatusCode` reports an
+  unreachable backend as a null status code — PR #30 removed that arm
+  (cross-ref IC-72); (4) the `ArgumentError` arm of the settings
   screen `_describeError` helper was unreachable because `_save` validates the
   URL with the same predicate before calling `Config`, so `Config` only ever
   raises a `StateError` there — PR #30 removed that arm. The generic
@@ -221,13 +225,14 @@ matching Plane work item.
 
 - **Plane:** IC-83
 - **Location:** `backend/tests/test_ci_cifar_script.py` (stub `curl`)
-- **Finding:** The stub appends the whole payload when `-C` is requested,
+- **Finding:** The stub appended the whole payload when `-C` was requested,
   instead of serving the bytes from the requested offset the way a real
-  `curl -C -` does. A resumed download in the harness is therefore always
-  corrupt, so the resume path can only be asserted as a failure.
-- **Fix:** Make the stub honour the range and serve the payload from the
-  requested offset, so a resumed download can succeed and the resume rule is
-  exercised against the real semantics.
+  `curl -C -` does. A resumed download in the harness was therefore always
+  corrupt, so the resume path could only be asserted as a failure.
+- **Fix:** **Delivered by PR #30** — the stub now serves the payload from the
+  requested byte offset, so `curl -C -` resumes the way the real client does,
+  and a test asserts that a resumed download completes the archive and matches
+  both pinned digests.
 
 ## CONFIG-PREV-READ — the previous-URL read is outside the guarded try
 
