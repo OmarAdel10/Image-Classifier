@@ -81,10 +81,30 @@ else:
     with open(os.environ["CURL_PAYLOAD_FILE"], "rb") as handle:
         data = handle.read()
 
+# 'curl -C -' resumes the transfer at the current size of the file, so the
+# stub serves the payload from that offset instead of appending all of it.
+offset = 0
+if "-C" in args:
+    index = args.index("-C")
+    value = args[index + 1] if index + 1 < len(args) else "-"
+    if value == "-":
+        offset = size
+    elif value.isdigit():
+        offset = int(value)
+
 # 'curl -C -' appends to the existing file, a plain download truncates it.
 resume = "-C" in args and target and os.path.exists(target)
-with open(target, "ab" if resume else "wb") as handle:
-    handle.write(data)
+mode = "ab" if resume else "wb"
+
+if "partial" in url and offset == 0:
+    # A transfer that drops half way through: the first attempt delivers
+    # half of the archive and fails, the way a lost connection does.
+    with open(target, mode) as handle:
+        handle.write(data[: len(data) // 2])
+    sys.exit(18)
+
+with open(target, mode) as handle:
+    handle.write(data[offset:])
 """
 
 
@@ -288,9 +308,30 @@ def test_partial_download_is_kept_between_attempts_of_the_same_source(
     assert len(calls) == 2
     # The second attempt sees the partial file and resumes it.
     assert calls[1].size == len(CORRUPT_PAYLOAD)
-    # 'curl -C -' is what turns the partial file into a resumed download.
-    assert "-C" in calls[1].argv
-    assert "-" in calls[1].argv
+    # 'curl -C -' is what turns the partial file into a resumed download: the
+    # offset has to be the next byte, not a separate flag.
+    assert any(pair == ("-C", "-") for pair in zip(calls[1].argv, calls[1].argv[1:]))
+
+
+def test_a_resumed_download_completes_the_archive(tmp_path: Path) -> None:
+    """A transfer that drops half way through is resumed to a valid archive.
+
+    The stub serves the payload from the requested byte offset, so the second
+    attempt of the same source completes the file and both pinned digests
+    match. A resume that cannot succeed can only be asserted as a failure,
+    which would leave the resume path untested.
+    """
+    process, calls = _run_script(tmp_path, ["https://example.test/partial"])
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    # The first attempt delivered half of the archive and failed, the second
+    # attempt resumed at that offset.
+    assert len(calls) == 2
+    assert calls[0].size == 0
+    assert calls[1].size == len(PAYLOAD) // 2
+    assert any(pair == ("-C", "-") for pair in zip(calls[1].argv, calls[1].argv[1:]))
+    # The completed archive matches both pinned digests.
+    assert process.stdout.count(f"{ARCHIVE_NAME}: OK") == 2
 
 
 def test_partial_download_is_dropped_when_the_source_changes(tmp_path: Path) -> None:
@@ -478,13 +519,6 @@ def test_the_partial_download_is_purged_at_every_attempt_count(tmp_path: Path) -
         assert good_calls
         # The second source starts at byte 0, whatever the attempt count is.
         assert [call.size for call in good_calls] == [0]
-
-
-def test_the_purge_is_bound_to_the_configured_attempt_count() -> None:
-    """The purge condition must read the attempt count, not a literal."""
-    script_text = SCRIPT.read_text()
-
-    assert '-eq "$ATTEMPTS"' in script_text
 
 
 def test_the_pytest_step_reads_the_dataset_from_the_cache_directory() -> None:
