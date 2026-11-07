@@ -98,7 +98,26 @@ void main() {
 
       expect(provider.state, isA<PredictionStateError>());
       final errorState = provider.state as PredictionStateError;
-      expect(errorState.message, contains('TypeError'));
+      // The raw error text is not shown to the user, but the failure is
+      // still reported instead of leaving the UI in the loading state.
+      expect(errorState.message, isNotEmpty);
+      expect(errorState.message, isNot(contains('TypeError')));
+    });
+
+    test('predict reports an unexpected Error without its raw text', () async {
+      final file = XFile('test.png');
+
+      when(mockApiClient.predictXFile(any))
+          .thenAnswer((_) => Future.error(StateError('internal detail')));
+
+      final future = provider.predict(file);
+
+      await future;
+
+      expect(provider.state, isA<PredictionStateError>());
+      final errorState = provider.state as PredictionStateError;
+      expect(errorState.message, isNotEmpty);
+      expect(errorState.message, isNot(contains('internal detail')));
     });
 
     test('predict sets state to error on an ArgumentError', () async {
@@ -113,7 +132,9 @@ void main() {
 
       expect(provider.state, isA<PredictionStateError>());
       final errorState = provider.state as PredictionStateError;
-      expect(errorState.message, contains('bad shape'));
+      // The failure is reported, but the raw error text is not shown.
+      expect(errorState.message, isNotEmpty);
+      expect(errorState.message, isNot(contains('bad shape')));
     });
 
     test('clear resets state to idle', () async {

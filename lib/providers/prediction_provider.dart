@@ -58,10 +58,18 @@ class PredictionProvider extends ChangeNotifier {
       _state = PredictionStateError(message: e.message);
     } on Exception catch (e) {
       _state = PredictionStateError(message: e.toString());
-    } on Error catch (e) {
-      // A programming or parsing Error (for example a TypeError from an
-      // unexpected response shape) must never leave the UI stuck in Loading.
-      _state = PredictionStateError(message: e.toString());
+    } on TypeError {
+      // A response with an unexpected shape fails with a TypeError. The
+      // user gets a fixed message: the raw error text is not shown.
+      _state = const PredictionStateError(
+        message: 'The backend returned an unexpected response.',
+      );
+    } on Error {
+      // Any other Error (a programming or parsing error) must never leave
+      // the UI stuck in Loading, but its text is not shown to the user.
+      _state = const PredictionStateError(
+        message: 'The prediction failed with an unexpected error.',
+      );
     }
     notifyListeners();
   }
