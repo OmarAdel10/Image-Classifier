@@ -19,6 +19,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -41,7 +42,8 @@ PINNED_SHA256 = "6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001c
 CACHE_KEY = f"cifar10-python-md5-{PINNED_MD5[:8]}-v2"
 CACHE_PATH = "/home/runner/.cache/cnn-cifar10"
 MIRROR_URL = (
-    "https://web.archive.org/web/2020id_/" "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+    "https://web.archive.org/web/20201130004040id_/"
+    "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 )
 ORIGIN_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 
@@ -67,6 +69,13 @@ if fail_substring and fail_substring in url:
     sys.exit(22)
 
 if "fail" in url:
+    sys.exit(22)
+
+if "errorpage" in url:
+    # An HTTP error page: the server answers with an error body instead of
+    # the archive. The body must never survive as the cached archive.
+    with open(target, "wb") as handle:
+        handle.write(b"<html>500 Internal Server Error</html>")
     sys.exit(22)
 
 if "slow" in url:
@@ -108,9 +117,12 @@ with open(target, mode) as handle:
 """
 
 
-# A shell stub for the stalled-transfer test. It starts in milliseconds, so
-# the per-attempt timeout cannot race the interpreter start-up, and it records
-# whether the transfer was killed or ran to completion.
+# A shell stub for the stalled-transfer test. It records whether the transfer
+# was killed or ran to completion, and then blocks on a read from a FIFO that
+# never receives data. The shell waits on the read itself, so the TERM signal
+# of the per-attempt timeout is handled right away. A foreground child (a
+# `sleep`) would defer the trap until that child exits, which made the test
+# depend on how the signal was delivered.
 _STUB_CURL_SHELL = """#!/bin/sh
 url=""
 out=""
@@ -126,11 +138,12 @@ size=0
 if [ -n "$out" ] && [ -f "$out" ]; then
   size=$(wc -c < "$out")
 fi
-printf '{"url": "%s", "size": %s, "argv": []}\\n' "$url" "$size" >> "$CURL_LOG"
 trap 'printf "killed\\n" >> "$CURL_KILLED_LOG"; exit 143' TERM
-# The transfer stalls. Without the per-attempt timeout this runs for a minute.
-sleep 60 >/dev/null 2>&1
-printf "done\\n" >> "$CURL_DONE_LOG"
+printf '{"url": "%s", "size": %s, "argv": []}\\n' "$url" "$size" >> "$CURL_LOG"
+exec 3< "$CURL_STALL_FIFO"
+while :; do
+  read -r _line <&3 || true
+done
 """
 
 
@@ -159,6 +172,13 @@ def _write_stub_curl(bin_dir: Path, body: str = _STUB_CURL) -> None:
     stub.chmod(0o755)
 
 
+def _default_source_count() -> int:
+    """Returns the number of download sources the script uses by default."""
+    match = re.search(r"CIFAR10_URLS:-(.*?)\}", SCRIPT.read_text(), re.S)
+    assert match, "the script does not pin a default source list"
+    return len([line for line in match.group(1).splitlines() if line.strip()])
+
+
 def _run_script(
     tmp_path: Path,
     urls: list[str] | None = None,
@@ -178,8 +198,8 @@ def _run_script(
     pinned digests the script verifies against. ``cache_dir`` overrides the
     cache directory, so a test can point the script at a directory that does
     not exist yet. ``timeout`` is the per-attempt budget in seconds. ``stub``
-    replaces the stubbed curl, so a test can use a stub that starts faster
-    than the Python one.
+    replaces the stubbed curl, so a test can use a stub that blocks instead
+    of delivering the archive.
 
     Returns the completed process and the recorded curl calls.
     """
@@ -194,6 +214,13 @@ def _run_script(
     payload_file.write_bytes(PAYLOAD)
     corrupt_file = tmp_path / "corrupt.bin"
     corrupt_file.write_bytes(CORRUPT_PAYLOAD)
+    # The stalled stub blocks on this FIFO. It is opened read-write, so the
+    # stub never waits for a writer and the read stays blocked until the
+    # timeout signals the stub.
+    stall_fifo = tmp_path / "stall.fifo"
+    if not stall_fifo.exists():
+        os.mkfifo(stall_fifo)
+    stall_fd = os.open(stall_fifo, os.O_RDWR)
 
     if cache_dir is None:
         cache_dir = tmp_path / "cache"
@@ -212,6 +239,7 @@ def _run_script(
             "CURL_DONE_LOG": str(done_path),
             "CURL_PAYLOAD_FILE": str(payload_file),
             "CURL_CORRUPT_FILE": str(corrupt_file),
+            "CURL_STALL_FIFO": str(stall_fifo),
             "CIFAR10_MD5": md5 or _md5(PAYLOAD),
             "CIFAR10_SHA256": sha256 or _sha256(PAYLOAD),
             "CIFAR10_ATTEMPTS": str(attempts),
@@ -223,14 +251,24 @@ def _run_script(
     if fail_substring is not None:
         env["CURL_FAIL_SUBSTRING"] = fail_substring
 
-    process = subprocess.run(
-        ["bash", str(SCRIPT), str(cache_dir)],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
+    source_count = (
+        len([url for url in urls if url.strip()]) if urls is not None else _default_source_count()
     )
+    # The harness has to outlast the budget the script may spend: every
+    # source may use every attempt. A fixed timeout cut the script off
+    # while it was still inside its own budget.
+    harness_timeout = max(120, timeout * attempts * source_count + 60)
+    try:
+        process = subprocess.run(
+            ["bash", str(SCRIPT), str(cache_dir)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=harness_timeout,
+            check=False,
+        )
+    finally:
+        os.close(stall_fd)
 
     calls: list[CurlCall] = []
     if log_path.exists():
@@ -627,29 +665,34 @@ def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> Non
     delivering the archive, so the timeout that wraps the download has to
     be applied - a pinned default value is not enough.
     """
+    started = time.monotonic()
     process, calls = _run_script(
         tmp_path,
         ["https://example.test/slow"],
-        timeout=2,
-        # The shell stub starts in milliseconds, so the timeout cannot race
-        # the start-up of the stub itself.
+        # The budget is much larger than the start-up cost of the stub, so
+        # the stub is always running when the timeout signals it.
+        timeout=10,
+        attempts=1,
         stub=_STUB_CURL_SHELL,
     )
+    elapsed = time.monotonic() - started
 
     assert process.returncode == 1
     assert "::error::CIFAR-10 archive could not be downloaded and verified." in (process.stdout)
-    # Two attempts, each aborted by the per-attempt timeout.
-    assert len(calls) == 2
+    # The stalled transfer was aborted: the script reported its own error
+    # instead of waiting for the transfer to finish.
+    assert elapsed < 60, f"the script waited {elapsed:.1f} s for a stalled transfer"
 
     killed_path = tmp_path / "curl.killed.log"
     done_path = tmp_path / "curl.done.log"
     killed = killed_path.read_text() if killed_path.exists() else ""
     done = done_path.read_text() if done_path.exists() else ""
-    # The stub recorded that it was killed in both attempts and never that it
-    # finished: the timeout interrupted the transfer instead of the transfer
-    # running to completion on its own.
-    assert killed.count("killed") == 2
+    # The stub was signalled and never completed the transfer: the timeout
+    # interrupted it instead of the transfer running to completion.
+    assert killed.count("killed") == 1
     assert done == ""
+    # The attempt really ran: the stub was started before it was killed.
+    assert len(calls) == 1
 
 
 def test_the_script_pins_the_download_budget() -> None:
@@ -701,10 +744,19 @@ def test_the_download_aborts_a_stalled_transfer(tmp_path: Path) -> None:
         ("--speed-limit", "1024"),
         ("--speed-time", "120"),
         ("--connect-timeout", "30"),
-        ("--retry", "3"),
     ):
         assert flag in argv, f"{flag} is missing from the curl call"
         assert value in argv, f"{flag} {value} is missing from the curl call"
+    # An HTTP error has to fail the transfer, and the transfer has to resume
+    # at the current size of the file.
+    assert "-fL" in argv
+    assert any(
+        pair == ("-C", "-") for pair in zip(argv, argv[1:])
+    ), f"the transfer does not resume at the current file size: {argv}"
+    # An automatic retry of a resumed transfer can re-send bytes and splice
+    # the file, so the script retries through its attempt loop instead.
+    assert "--retry" not in argv
+    assert "--retry-all-errors" not in argv
 
 
 def test_the_script_creates_a_missing_cache_directory(tmp_path: Path) -> None:
@@ -786,3 +838,105 @@ def test_workflow_restore_and_save_agree_on_key_and_path() -> None:
             r"(?m)^\s*(run:.*)?\b(md5sum|sha256sum|wget|curl)\b",
             block,
         ), f"{name} inlines the download logic"
+
+
+def test_the_script_reports_its_usage_without_a_cache_directory() -> None:
+    """A call without a cache directory has to fail with a usage message.
+
+    The workflow calls the script with one argument. A call without it must
+    stop before anything is downloaded.
+    """
+    for arguments in ([], [""]):
+        process = subprocess.run(
+            ["bash", str(SCRIPT), *arguments],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert process.returncode != 0, "the script accepted a call without a cache directory"
+        assert "usage: fetch_cifar10.sh <cache-dir>" in process.stderr
+
+
+def test_a_blank_source_is_skipped(tmp_path: Path) -> None:
+    """A blank line in the source list must not start a download.
+
+    The source list is a newline separated environment variable, so it can
+    carry an empty line. That line is not a source and must be skipped.
+    """
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/good", ""],
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert len(calls) == 1
+    assert calls[0].url == "https://example.test/good"
+
+
+def test_an_http_error_page_is_not_kept_as_the_archive(tmp_path: Path) -> None:
+    """An error page must never end up in the cache directory.
+
+    A mirror that answers with an error body would leave a file that looks
+    like the archive. The pinned digests reject it and the script drops it.
+    """
+    cache_dir = tmp_path / "cache"
+    process, _calls = _run_script(
+        tmp_path,
+        ["https://example.test/errorpage"],
+        cache_dir=cache_dir,
+    )
+
+    assert process.returncode == 1
+    assert "::error::CIFAR-10 archive could not be downloaded and verified." in (process.stdout)
+    assert not (cache_dir / ARCHIVE_NAME).exists()
+
+
+def test_the_script_aborts_when_the_cache_directory_cannot_be_created(
+    tmp_path: Path,
+) -> None:
+    """A cache directory that cannot be created has to stop the script.
+
+    The script must not download into a directory it was unable to create.
+    """
+    blocked = tmp_path / "blocked"
+    blocked.write_bytes(b"not a directory")
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/good"],
+        cache_dir=blocked,
+    )
+
+    assert process.returncode != 0
+    assert calls == [], "the script downloaded into a cache directory it could not create"
+
+
+def test_invalid_budget_overrides_are_rejected(tmp_path: Path) -> None:
+    """A broken budget override has to be reported by the script itself.
+
+    An attempt count or a timeout that is not a number would otherwise fail
+    inside `seq` or `timeout`, with an error that does not name the
+    override that caused it.
+    """
+    for name, value in (
+        ("CIFAR10_ATTEMPTS", "abc"),
+        ("CIFAR10_ATTEMPTS", "0"),
+        ("CIFAR10_TIMEOUT", "abc"),
+        ("CIFAR10_TIMEOUT", "0"),
+    ):
+        env = dict(os.environ)
+        env[name] = value
+        env["CIFAR10_URLS"] = "https://example.test/good"
+        process = subprocess.run(
+            ["bash", str(SCRIPT), str(tmp_path / "cache")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert process.returncode == 1, f"{name}={value} was accepted"
+        assert f"::error::{name} must be a positive integer" in (process.stdout)
+        assert "Downloading CIFAR-10 from" not in (process.stdout)

@@ -31,10 +31,22 @@ ATTEMPTS="${CIFAR10_ATTEMPTS:-2}"
 TIMEOUT="${CIFAR10_TIMEOUT:-1200}"
 # The archive.org snapshot serves the identical bytes ~6x faster than the
 # throttled cs.toronto.edu origin, which cannot finish the 170 MB archive
-# inside the job budget. Both sources are verified against the pinned hashes
+# inside the job budget. The capture is pinned to an immutable id instead of
+# the "2020id_" closest-capture selector, so the mirror cannot start serving
+# different bytes later. Both sources are verified against the pinned hashes
 # above, so the mirror is verified, not trusted.
-URLS="${CIFAR10_URLS:-https://web.archive.org/web/2020id_/https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+URLS="${CIFAR10_URLS:-https://web.archive.org/web/20201130004040id_/https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz}"
+
+if ! [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::CIFAR10_ATTEMPTS must be a positive integer, got '$ATTEMPTS'."
+  exit 1
+fi
+
+if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::CIFAR10_TIMEOUT must be a positive integer, got '$TIMEOUT'."
+  exit 1
+fi
 
 mkdir -p "$CACHE_DIR"
 cd "$CACHE_DIR"
@@ -53,7 +65,11 @@ else
     [ -n "$url" ] || continue
     echo "Downloading CIFAR-10 from $url"
     for attempt in $(seq 1 "$ATTEMPTS"); do
-      timeout "$TIMEOUT" curl -fL -C - --retry 3 --retry-all-errors \
+      # No --retry: an automatic retry of a resumed transfer can re-send
+      # bytes and splice the file. The attempt loop above retries with a
+      # fresh resume instead. --kill-after bounds a child that ignores the
+      # TERM signal, so an attempt cannot outlive its budget.
+      timeout --kill-after=30 "$TIMEOUT" curl -fL -C - \
         --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
         -o cifar-10-python.tar.gz "$url" || true
       if verify; then
