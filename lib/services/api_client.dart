@@ -114,9 +114,10 @@ class ApiClient {
   /// Classifies an image and returns ranked predictions.
   Future<PredictionResponse> predict(File imageFile) async {
     final url = await baseUrl;
-    // The file is read before the request is sent, so a missing or
-    // unreadable image is reported as a file problem instead of being
-    // mistaken for a connection failure.
+    // The file size is resolved before the request is sent, so a missing
+    // image file is reported as a file problem instead of being mistaken for
+    // a connection failure. A file that exists but cannot be read fails only
+    // while the request body is streamed, and is reported as an I/O error.
     final http.MultipartFile upload;
     try {
       upload = await http.MultipartFile.fromPath('file', imageFile.path);
