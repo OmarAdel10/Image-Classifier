@@ -115,8 +115,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _statusIsError = true;
-        _statusMessage =
-            'Could not test $url: ${e is ApiException ? e.message : e}';
+        // The probe never raises an ApiException: healthStatusCode() reports
+        // an unreachable backend as a null status code instead of throwing.
+        // The generic renderer therefore names the actual cause.
+        _statusMessage = 'Could not test $url: ${_describeError(e)}';
       });
     } finally {
       if (mounted) {

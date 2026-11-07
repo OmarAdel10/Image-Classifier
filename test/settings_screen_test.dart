@@ -804,6 +804,14 @@ void main() {
           ),
           findsOneWidget,
         );
+        // The banner names the cause of the failure, so the user is not left
+        // guessing what went wrong.
+        expect(
+          find.textContaining(
+            'Could not test ${Config.platformDefaultApiBaseUrl}: Exception: boom',
+          ),
+          findsOneWidget,
+        );
         // The probe finished: the button is re-enabled for another attempt.
         final probeButton = tester.widget<FilledButton>(
           _buttonWithLabel('Test Connection'),
