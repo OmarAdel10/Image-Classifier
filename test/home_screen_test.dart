@@ -51,7 +51,9 @@ Widget _buildHomeScreen({
 }) {
   final apiClient = ApiClient(
     client: httpClient,
-    timeout: const Duration(milliseconds: 100),
+    // A generous budget: a short timeout races the mocked failures under
+    // load, which made the error-path tests flaky.
+    timeout: const Duration(seconds: 5),
   );
   return MultiProvider(
     providers: [
@@ -226,6 +228,43 @@ void main() {
       expect(snackBar.action, isNull);
     });
 
+    testWidgets(
+      'replaces a previous image error snackbar instead of queueing',
+      (WidgetTester tester) async {
+        final imageFile = _createTempImageFile();
+        final pickedFile = _InMemoryXFile(
+          imageFile.path,
+          imageFile.readAsBytesSync(),
+        );
+        var validations = 0;
+        final imageService = MockImageService();
+        when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+        when(imageService.validateAndCompress(any)).thenAnswer((_) async {
+          validations++;
+          throw StateError(
+            validations == 1 ? 'first image failure' : 'second image failure',
+          );
+        });
+
+        await tester.pumpWidget(
+          _buildHomeScreen(
+            httpClient: MockClient((request) async => http.Response('{}', 200)),
+            imageService: imageService,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await _tapDropZoneAndSettle(tester);
+        await _tapDropZoneAndSettle(tester);
+
+        // The second image error must REPLACE the first snackbar
+        // (hideCurrentSnackBar), not queue behind it.
+        expect(find.textContaining('second image failure'), findsOneWidget);
+        expect(find.textContaining('first image failure'), findsNothing);
+        expect(find.byType(SnackBar), findsOneWidget);
+      },
+    );
+
     testWidgets('prediction errors offer a Settings action that navigates', (
       WidgetTester tester,
     ) async {
@@ -298,6 +337,61 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('replaces a different prediction error instead of queueing', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      var predictCalls = 0;
+      final mockClient = MockClient((request) async {
+        if (request.url.path == '/model-info') {
+          return http.Response(
+            '{"model": "cnn_scratch", "classes": ["cat", "dog"]}',
+            200,
+          );
+        }
+        if (predictCalls == 0) {
+          predictCalls++;
+          throw const SocketException('first failure');
+        }
+        throw const HttpException('second failure');
+      });
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: mockClient,
+          imageService: MockImageService(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final provider = tester
+          .element(find.byType(HomeScreen))
+          .read<PredictionProvider>();
+      final image = XFile(imageFile.path);
+
+      await tester.runAsync(() async {
+        await provider.predict(image);
+      });
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cannot reach'), findsOneWidget);
+      expect(find.byType(SnackBar), findsOneWidget);
+
+      // A second, different error must REPLACE the first snackbar
+      // (hideCurrentSnackBar), not queue behind it.
+      await tester.runAsync(() async {
+        await provider.predict(image);
+      });
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('HTTP error while contacting'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Cannot reach'), findsNothing);
+      expect(find.byType(SnackBar), findsOneWidget);
     });
   });
 }

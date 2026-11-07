@@ -86,6 +86,36 @@ void main() {
       expect(errorState.message, contains('network error'));
     });
 
+    test('predict sets state to error on a thrown Error (TypeError)', () async {
+      final file = XFile('test.png');
+
+      when(mockApiClient.predictXFile(any))
+          .thenAnswer((_) => Future.error(TypeError()));
+
+      final future = provider.predict(file);
+
+      await future;
+
+      expect(provider.state, isA<PredictionStateError>());
+      final errorState = provider.state as PredictionStateError;
+      expect(errorState.message, contains('TypeError'));
+    });
+
+    test('predict sets state to error on an ArgumentError', () async {
+      final file = XFile('test.png');
+
+      when(mockApiClient.predictXFile(any))
+          .thenAnswer((_) => Future.error(ArgumentError('bad shape')));
+
+      final future = provider.predict(file);
+
+      await future;
+
+      expect(provider.state, isA<PredictionStateError>());
+      final errorState = provider.state as PredictionStateError;
+      expect(errorState.message, contains('bad shape'));
+    });
+
     test('clear resets state to idle', () async {
       final file = XFile('test.png');
       final mockResponse = PredictionResponse(

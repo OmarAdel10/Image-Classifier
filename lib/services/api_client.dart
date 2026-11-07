@@ -83,9 +83,15 @@ class ApiClient {
       return null;
     } on SocketException {
       return null;
+    } on http.ClientException {
+      return null;
     } on HttpException {
       return null;
     } on FormatException {
+      return null;
+    } on ArgumentError {
+      return null;
+    } on IOException {
       return null;
     }
   }
@@ -108,9 +114,22 @@ class ApiClient {
   /// Classifies an image and returns ranked predictions.
   Future<PredictionResponse> predict(File imageFile) async {
     final url = await baseUrl;
+    // The file size is resolved before the request is sent, so a missing
+    // image file is reported as a file problem instead of being mistaken for
+    // a connection failure. A file that exists but cannot be read fails only
+    // while the request body is streamed, and is reported as an I/O error.
+    final http.MultipartFile upload;
+    try {
+      upload = await http.MultipartFile.fromPath('file', imageFile.path);
+    } on FileSystemException catch (e) {
+      throw ApiException(
+        message: 'Could not read the image file: ${e.message}',
+        statusCode: 400,
+      );
+    }
     return _handleRequest(url, () async {
       final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
-        ..files.add(await http.MultipartFile.fromPath('file', imageFile.path));
+        ..files.add(upload);
 
       final streamedResponse = await client.send(request).timeout(_timeout);
       final response = await http.Response.fromStream(streamedResponse);
@@ -164,7 +183,6 @@ class ApiClient {
   /// internally (which this class does not do by default).
   Future<void> dispose() async {
     // No-op by default — caller owns the client lifecycle.
-    // Override in a subclass if internal client management is added.
   }
 
   /// Runs [request], translating transport failures into [ApiException].
@@ -189,14 +207,42 @@ class ApiClient {
             'the address is reachable from this device.',
         statusCode: 503,
       );
+    } on http.ClientException catch (e) {
+      throw ApiException(
+        message:
+            'Connection to $url failed: ${e.message}. '
+            'Check that the backend is running and reachable from this device.',
+        statusCode: 502,
+      );
     } on HttpException {
       throw ApiException(
         message: 'HTTP error while contacting $url.',
         statusCode: 502,
       );
+    } on IOException catch (e) {
+      throw ApiException(
+        message: 'Connection to $url failed: $e.',
+        statusCode: 503,
+      );
     } on FormatException catch (e) {
       throw ApiException(
         message: 'Invalid response from $url: ${e.message}',
+        statusCode: 502,
+      );
+    } on TypeError {
+      throw ApiException(
+        message:
+            'Invalid response from $url: unexpected response shape. '
+            'Is the backend the image classifier API?',
+        statusCode: 502,
+      );
+    } on ArgumentError catch (e) {
+      // The address itself is validated before the request, so an
+      // ArgumentError here comes from the request, not from the URL.
+      throw ApiException(
+        message:
+            'Invalid request to $url: '
+            '${e.message?.toString() ?? 'invalid argument'}',
         statusCode: 502,
       );
     }
@@ -234,14 +280,12 @@ class ApiClient {
       if (json is Map<String, dynamic> && json['detail'] != null) {
         final detail = json['detail'];
         if (detail is String) {
-          // Sanitize: limit length and strip control characters (IC-57)
           return _sanitizeErrorMessage(detail);
         }
       }
     } catch (_) {
       // Fall through to default message
     }
-    // Sanitize fallback message to avoid leaking sensitive data (IC-57)
     return _sanitizeErrorMessage('Request failed with status $body');
   }
 

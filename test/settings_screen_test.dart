@@ -11,6 +11,10 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
+import 'support/delayed_prefs_store.dart';
+import 'support/false_prefs_store.dart';
+import 'support/false_removing_prefs_store.dart';
+import 'support/refusing_write_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
 
 /// A built settings screen together with the [ApiClient] instance it uses.
@@ -103,6 +107,38 @@ void main() {
       expect(field.controller?.text, 'http://stored.example.com:1234');
     });
 
+    testWidgets('keeps text typed while the stored URL resolves', (
+      WidgetTester tester,
+    ) async {
+      // The store read is held open so the text is typed *before* the stored
+      // URL arrives: the non-clobber guard in _loadCurrentUrl only matters
+      // when the resolve completes after the user has typed.
+      final store = DelayedPrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
+      });
+      SharedPreferencesStorePlatform.instance = store;
+      SharedPreferences.resetStatic();
+
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          MockClient((request) async => http.Response('{}', 200)),
+        ).widget,
+      );
+      await tester.enterText(
+        find.byType(TextField),
+        'http://typed.example.com:9000',
+      );
+      await tester.pump();
+
+      // The stored URL only now becomes available.
+      store.release();
+      await tester.pumpAndSettle();
+
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, 'http://typed.example.com:9000');
+    });
+
     testWidgets('shows a validation error and disables Save for a bad URL', (
       WidgetTester tester,
     ) async {
@@ -168,6 +204,35 @@ void main() {
       );
     });
 
+    testWidgets('probes the normalized URL', (WidgetTester tester) async {
+      final probed = <String>[];
+      final harness = _buildSettingsScreen(
+        MockClient((request) async {
+          probed.add(request.url.toString());
+          return http.Response('{}', 200);
+        }),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      // A trailing slash would produce '//health' if it were not stripped.
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000/',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Test Connection'));
+      await tester.pumpAndSettle();
+
+      expect(probed, ['http://saved.example.com:9000/health']);
+      // The banner shows the normalized URL, so a trailing slash cannot hide
+      // in the message the user reads.
+      expect(
+        find.text('Connected to http://saved.example.com:9000'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('Save makes the live client use the new URL', (
       WidgetTester tester,
     ) async {
@@ -192,9 +257,223 @@ void main() {
       expect(await harness.client.baseUrl, 'http://saved.example.com:9000');
     });
 
-    testWidgets('warns that a compile-time override wins over the saved URL', (
+    testWidgets('Reset to Default makes the live client use the default URL', (
       WidgetTester tester,
     ) async {
+      SharedPreferences.setMockInitialValues({
+        Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+      });
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      // Resolve (and cache) the stored URL before resetting.
+      expect(await harness.client.baseUrl, 'http://stored.example.com:1234');
+
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      // The client must not keep using the cached (now cleared) URL.
+      expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
+    });
+
+    testWidgets('reports a missing ApiClient provider instead of throwing', (
+      WidgetTester tester,
+    ) async {
+      // The shipped app always provides the client, but a missing provider
+      // must not escape the handler or leave the Test Connection button
+      // spinning forever.
+      await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
+      await tester.pumpAndSettle();
+
+      // The status banner grows with the error text, so the buttons can be
+      // scrolled out of the lazily built list between the actions.
+      Future<void> tapButton(String label) async {
+        await tester.scrollUntilVisible(
+          find.text(label),
+          100,
+          scrollable: find.byType(Scrollable).first,
+        );
+        await tester.tap(_buttonWithLabel(label));
+        await tester.pumpAndSettle();
+      }
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000',
+      );
+      await tester.pump();
+
+      await tapButton('Test Connection');
+
+      expect(find.textContaining('Could not test'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+
+      await tapButton('Save');
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+      // The generic error arm must name the error that caused it, so a
+      // missing provider is not reported as an anonymous failure.
+      expect(find.textContaining('Provider<ApiClient>'), findsOneWidget);
+
+      await tapButton('Reset to Default');
+
+      expect(find.textContaining('Could not reset'), findsOneWidget);
+    });
+
+    testWidgets('reports a storage refusal instead of claiming success', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = FalseReturningPrefsStore();
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+      expect(find.textContaining('Saved. Using'), findsNothing);
+      // The message names the cause instead of leaking the raw exception.
+      expect(
+        find.textContaining('Could not store the API base URL'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Bad state:'), findsNothing);
+      // The refused URL must not be used by the app either.
+      expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
+
+      await tester.scrollUntilVisible(
+        find.text('Reset to Default'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Could not remove the stored URL'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('still in use'), findsNothing);
+    });
+
+    testWidgets('a refused save keeps the stored backend address in use', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = RefusingWritePrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
+      });
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://new.example.com:9000',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+      // The refused write must not throw away the backend address that is
+      // still stored.
+      expect(await harness.client.baseUrl, 'http://stored.example.com:1234');
+    });
+
+    testWidgets('a refused save re-resolves the client from the store', (
+      WidgetTester tester,
+    ) async {
+      final store = RefusingWritePrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
+      });
+      SharedPreferencesStorePlatform.instance = store;
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      // Resolve the URL first, so the client caches it.
+      expect(await harness.client.baseUrl, 'http://stored.example.com:1234');
+
+      // The persisted address changes underneath the running app.
+      store.setPersisted(
+        'flutter.${Config.apiBaseUrlPrefsKey}',
+        'http://changed.example.com:9999',
+      );
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://new.example.com:9000',
+      );
+      await tester.pump();
+      await tester.tap(_buttonWithLabel('Save'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Could not save'), findsOneWidget);
+      // The client must drop its cached address and read the persisted one.
+      expect(await harness.client.baseUrl, 'http://changed.example.com:9999');
+    });
+
+    testWidgets('a refused reset says the stored URL is not active now', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = FalseRemovingPrefsStore({
+        'flutter.${Config.apiBaseUrlPrefsKey}':
+            'http://stored.example.com:1234',
+      });
+      SharedPreferences.resetStatic();
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.text('Reset to Default'),
+        100,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      // The platform refused the removal, but the in-memory cache is gone, so
+      // the stored URL is not in use - the message must not claim otherwise.
+      expect(find.textContaining('not active now'), findsOneWidget);
+      expect(find.textContaining('still in use'), findsNothing);
+      expect(await harness.client.baseUrl, Config.platformDefaultApiBaseUrl);
+    });
+
+    testWidgets('pinned build shows the banner and disables Save', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        Config.apiBaseUrlPrefsKey: 'http://saved.example.com:9000',
+      });
+
       await tester.pumpWidget(
         _buildSettingsScreen(
           MockClient((request) async => http.Response('{}', 200)),
@@ -203,18 +482,94 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byType(TextField),
-        'http://saved.example.com:9000',
+      expect(
+        find.textContaining('Pinned by --dart-define=API_BASE_URL='),
+        findsOneWidget,
       );
-      await tester.pump();
+      expect(find.textContaining('Save is disabled'), findsOneWidget);
+      // The field is pre-filled with the pinned URL it can probe but not save.
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, 'http://compile.example.com:8000');
 
-      await tester.tap(_buttonWithLabel('Save'));
+      final saveButton = tester.widget<FilledButton>(_buttonWithLabel('Save'));
+      expect(saveButton.onPressed, isNull);
+    });
+
+    testWidgets('Reset to Default clears the stored URL while pinned', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        Config.apiBaseUrlPrefsKey: 'http://stored.example.com:1234',
+      });
+
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          MockClient((request) async => http.Response('{}', 200)),
+          compileTimeOverride: 'http://compile.example.com:8000',
+        ).widget,
+      );
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('overrides it'), findsOneWidget);
-      expect(find.textContaining('compile.example.com:8000'), findsOneWidget);
+      // Reset stays enabled while pinned: removing a stored override is
+      // always safe, because it can never take effect in this build.
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining(
+          'Cleared the stored URL; --dart-define=API_BASE_URL=',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('http://compile.example.com:8000'),
+        findsWidgets,
+      );
+
+      // The stored override is gone: the field shows the pinned URL and the
+      // platform default resolves again once the pin is removed.
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, 'http://compile.example.com:8000');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+      expect(
+        await Config.resolveApiBaseUrl(),
+        Config.platformDefaultApiBaseUrl,
+      );
     });
+
+    testWidgets(
+      'Save is disabled while pinned and stores nothing when tapped',
+      (WidgetTester tester) async {
+        await tester.pumpWidget(
+          _buildSettingsScreen(
+            MockClient((request) async => http.Response('{}', 200)),
+            compileTimeOverride: 'http://compile.example.com:8000',
+          ).widget,
+        );
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byType(TextField),
+          'http://saved.example.com:9000',
+        );
+        await tester.pump();
+
+        // Observable contract of the pinned build: the Save button is
+        // disabled, so tapping it stores nothing and reports no success.
+        final saveButton = tester.widget<FilledButton>(
+          _buttonWithLabel('Save'),
+        );
+        expect(saveButton.onPressed, isNull);
+
+        await tester.tap(_buttonWithLabel('Save'));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('Saved. Using'), findsNothing);
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+      },
+    );
 
     testWidgets('Save shows an error banner when storage fails', (
       WidgetTester tester,
@@ -268,6 +623,32 @@ void main() {
       },
     );
 
+    testWidgets('Reset to Default reports failure when storage fails', (
+      WidgetTester tester,
+    ) async {
+      SharedPreferencesStorePlatform.instance = ThrowingPrefsStore();
+      SharedPreferences.resetStatic();
+
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          MockClient((request) async => http.Response('{}', 200)),
+        ).widget,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(_buttonWithLabel('Reset to Default'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Could not remove the stored URL'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('still in use'), findsNothing);
+      // The field keeps showing the resolved default; nothing was cleared.
+      final field = tester.widget<TextField>(find.byType(TextField));
+      expect(field.controller?.text, Config.platformDefaultApiBaseUrl);
+    });
+
     testWidgets(
       'Test Connection shows a failure status for an unreachable URL',
       (WidgetTester tester) async {
@@ -315,6 +696,15 @@ void main() {
         requestedUrls,
         contains('${Config.platformDefaultApiBaseUrl}/health'),
       );
+
+      // Typing a new value clears the banner about the previous one.
+      await tester.enterText(
+        find.byType(TextField),
+        'http://changed.example.com:9000',
+      );
+      await tester.pump();
+
+      expect(find.textContaining('Connected to'), findsNothing);
     });
 
     testWidgets('Test Connection probes the URL as typed', (
@@ -363,5 +753,71 @@ void main() {
       expect(find.textContaining('Reached'), findsOneWidget);
       expect(find.textContaining('HTTP 500'), findsOneWidget);
     });
+
+    testWidgets(
+      'Test Connection reports an unreachable backend for a client exception',
+      (WidgetTester tester) async {
+        final mockClient = MockClient((request) async {
+          throw http.ClientException('connection closed');
+        });
+
+        await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+        await tester.pumpAndSettle();
+
+        await tester.tap(_buttonWithLabel('Test Connection'));
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        // A ClientException is swallowed by healthStatusCode (it reports no
+        // status code), so the probe reports the backend as unreachable.
+        expect(
+          find.textContaining(
+            'Could not reach ${Config.platformDefaultApiBaseUrl}',
+          ),
+          findsOneWidget,
+        );
+        // The probe finished: the button is re-enabled for another attempt.
+        final probeButton = tester.widget<FilledButton>(
+          _buttonWithLabel('Test Connection'),
+        );
+        expect(probeButton.onPressed, isNotNull);
+      },
+    );
+
+    testWidgets(
+      'Test Connection reports unexpected probe failures without crashing',
+      (WidgetTester tester) async {
+        final mockClient = MockClient((request) async {
+          throw Exception('boom');
+        });
+
+        await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+        await tester.pumpAndSettle();
+
+        await tester.tap(_buttonWithLabel('Test Connection'));
+        await tester.pump();
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining(
+            'Could not test ${Config.platformDefaultApiBaseUrl}',
+          ),
+          findsOneWidget,
+        );
+        // The banner names the cause of the failure, so the user is not left
+        // guessing what went wrong.
+        expect(
+          find.textContaining(
+            'Could not test ${Config.platformDefaultApiBaseUrl}: Exception: boom',
+          ),
+          findsOneWidget,
+        );
+        // The probe finished: the button is re-enabled for another attempt.
+        final probeButton = tester.widget<FilledButton>(
+          _buttonWithLabel('Test Connection'),
+        );
+        expect(probeButton.onPressed, isNotNull);
+      },
+    );
   });
 }

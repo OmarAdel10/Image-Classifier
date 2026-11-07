@@ -58,6 +58,10 @@ class PredictionProvider extends ChangeNotifier {
       _state = PredictionStateError(message: e.message);
     } on Exception catch (e) {
       _state = PredictionStateError(message: e.toString());
+    } on Error catch (e) {
+      // A programming or parsing Error (for example a TypeError from an
+      // unexpected response shape) must never leave the UI stuck in Loading.
+      _state = PredictionStateError(message: e.toString());
     }
     notifyListeners();
   }

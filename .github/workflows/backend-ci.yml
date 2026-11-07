@@ -17,7 +17,7 @@ jobs:
   python-backend:
     name: Python Backend CI
     runs-on: ubuntu-24.04
-    timeout-minutes: 45  # first run downloads CIFAR-10 (~170MB); cached runs ~5 min
+    timeout-minutes: 120  # first run downloads CIFAR-10 (~170MB); cached runs ~5 min
     permissions:
       contents: read
     steps:
@@ -45,36 +45,39 @@ jobs:
         working-directory: backend
         run: black --check src/ tests/ scripts/ conftest.py
 
-      - name: Cache CIFAR-10 dataset
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      - name: Restore CIFAR-10 dataset cache
+        id: cifar-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /home/runner/.cache/cnn-cifar10
-          key: cifar10-python-md5-c58f3010
-          restore-keys: cifar10-python-
+          # The key is versioned: an immutable key that once held a corrupt
+          # archive can never be overwritten, so the poisoned entry would
+          # survive forever. 'v2' misses the poisoned key exactly and the
+          # restore-key is narrowed to the same version, so the bad entry
+          # is never restored at all.
+          key: cifar10-python-md5-c58f3010-v2
+          restore-keys: cifar10-python-md5-c58f3010-v2
 
-      - name: Download and verify CIFAR-10 (self-healing cache)
-        run: |
-          mkdir -p /home/runner/.cache/cnn-cifar10
-          cd /home/runner/.cache/cnn-cifar10
-          # Self-heal: purge a corrupt or partial archive instead of
-          # failing forever on an immutable cache key. Purge on EITHER
-          # hash mismatch (md5 or sha256).
-          if [ ! -f cifar-10-python.tar.gz ] \
-             || ! md5sum -c <<< 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' \
-             || ! sha256sum -c <<< '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz'; then
-            rm -f cifar-10-python.tar.gz
-            # Each attempt is capped at 10 min of wall clock: wget --timeout
-            # only bounds per-read stalls, so a throttled transfer can
-            # otherwise hang for the whole job (observed 37m+). -c resumes
-            # the partial archive across attempts instead of restarting from
-            # byte 0; the md5/sha256 checks below fail the step if the
-            # archive is still incomplete after 3 attempts.
-            for attempt in 1 2 3; do
-              timeout 600 wget -c -q --timeout=60 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz && break
-            done
-          fi
-          echo 'c58f30108f718f92721af3b95e74349a  cifar-10-python.tar.gz' | md5sum -c -
-          echo '6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  cifar-10-python.tar.gz' | sha256sum -c -
+      - name: Download and verify CIFAR-10
+        # The download logic lives in backend/scripts/fetch_cifar10.sh so it
+        # is a single source of truth for both workflows and is covered by
+        # backend/tests/test_ci_cifar_script.py.
+        working-directory: backend
+        run: bash scripts/fetch_cifar10.sh /home/runner/.cache/cnn-cifar10
+
+      - name: Save verified CIFAR-10 dataset cache
+        # Only a hash-verified archive is ever cached. Saving a partial
+        # download under the immutable key poisoned every later run that
+        # restored it (self-sustaining failure loop). The versioned key
+        # retires the poisoned entry: the verified archive is written under
+        # the new key, so later runs hit it exactly. The save action reports
+        # a cache-reservation conflict as a warning and never fails the job
+        # on its own, so no continue-on-error mask is needed.
+        if: success() && steps.cifar-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: /home/runner/.cache/cnn-cifar10
+          key: cifar10-python-md5-c58f3010-v2
 
       - name: Cache pretrained model weights
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830

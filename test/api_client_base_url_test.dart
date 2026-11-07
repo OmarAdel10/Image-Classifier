@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -245,6 +246,60 @@ void main() {
 
         expect(await apiClient.healthStatusCode(), isNull);
       });
+
+      test('returns null when the client throws a ClientException', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw http.ClientException('connection closed');
+          }),
+          baseUrl: 'http://client-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when the request raises an ArgumentError', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw ArgumentError('bad request URL');
+          }),
+          baseUrl: 'http://arg-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when a filesystem-level IOException occurs', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw const FileSystemException('disk error', '/tmp/x');
+          }),
+          baseUrl: 'http://io-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when the response raises an HttpException', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async {
+            throw HttpException('malformed response');
+          }),
+          baseUrl: 'http://http-error.example.com:8000',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
+
+      test('returns null when the base URL cannot be parsed', () async {
+        final apiClient = ApiClient(
+          client: MockClient((request) async => http.Response('{}', 200)),
+          // An unterminated IPv6 host makes Uri.parse throw.
+          baseUrl: 'http://[bad',
+        );
+
+        expect(await apiClient.healthStatusCode(), isNull);
+      });
     });
 
     group('error messages include the base URL', () {
@@ -333,7 +388,9 @@ void main() {
         },
       );
 
-      test('predict names the URL when the socket fails', () async {
+      testWidgets('predict names the URL when the socket fails', (
+        WidgetTester tester,
+      ) async {
         final file = _createTempImageFile();
         final mockClient = MockClient((request) async {
           throw SocketException('Connection refused');
@@ -341,32 +398,66 @@ void main() {
         final apiClient = ApiClient(
           client: mockClient,
           baseUrl: 'http://predict.example.com:8000',
-          timeout: const Duration(milliseconds: 100),
+          // The mock fails immediately, so the timeout only decides the
+          // outcome when the machine is heavily loaded. A short timeout made
+          // this test flaky (it raced the 408 path).
+          timeout: const Duration(seconds: 5),
         );
 
-        await expectLater(
-          apiClient.predict(file),
-          throwsA(
-            isA<ApiException>()
-                .having(
-                  (e) => e.message,
-                  'message',
-                  contains('http://predict.example.com:8000'),
-                )
-                .having((e) => e.statusCode, 'statusCode', 503),
-          ),
-        );
+        // The multipart body is read from the real file system, which the
+        // fake-async zone of a widget test would never complete.
+        await tester.runAsync(() async {
+          await expectLater(
+            apiClient.predict(file),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('http://predict.example.com:8000'),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 503),
+            ),
+          );
+        });
       });
-    });
 
-    group('malformed JSON responses', () {
-      Future<void> expectInvalidJsonResponse(String body) async {
-        final mockClient = MockClient(
-          (request) async => http.Response(body, 200),
-        );
+      test(
+        'a ClientException produces an ApiException with status 502',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw http.ClientException('connection closed');
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://client-error.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('http://client-error.example.com:8000'),
+                      contains('connection closed'),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test('an IOException produces an ApiException with status 503', () async {
+        final mockClient = MockClient((request) async {
+          throw const FileSystemException('disk error', '/tmp/x');
+        });
         final apiClient = ApiClient(
           client: mockClient,
-          baseUrl: 'http://bad-json.example.com:8000',
+          baseUrl: 'http://io-error.example.com:8000',
         );
 
         await expectLater(
@@ -376,11 +467,155 @@ void main() {
                 .having(
                   (e) => e.message,
                   'message',
+                  contains('http://io-error.example.com:8000'),
+                )
+                .having((e) => e.statusCode, 'statusCode', 503),
+          ),
+        );
+      });
+
+      test(
+        'an ArgumentError produces an ApiException with status 502',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw ArgumentError('bad address');
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://arg-error.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('http://arg-error.example.com:8000'),
+                      contains('bad address'),
+                      // The address is validated before the request, so the
+                      // message must not blame the backend address.
+                      isNot(contains('Invalid backend address')),
+                      isNot(contains('null')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test(
+        'an ArgumentError without a message is reported without null',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw ArgumentError();
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://arg-error.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('invalid argument'),
+                      isNot(contains('null')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test('a missing image file is reported as a file problem', () async {
+        final mockClient = MockClient((request) async {
+          return http.Response('{}', 200);
+        });
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://predict.example.com:8000',
+        );
+
+        await expectLater(
+          apiClient.predict(
+            File('${Directory.systemTemp.path}/missing-image-file.png'),
+          ),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
                   allOf(
-                    contains('Invalid response from'),
-                    contains('http://bad-json.example.com:8000'),
+                    contains('Could not read the image file'),
+                    // A missing file is not a connection problem.
+                    isNot(contains('Connection to')),
                   ),
                 )
+                .having((e) => e.statusCode, 'statusCode', 400),
+          ),
+        );
+      });
+
+      test(
+        'predictBytes names the URL when the client throws a ClientException',
+        () async {
+          final mockClient = MockClient((request) async {
+            throw http.ClientException('connection closed');
+          });
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://bytes.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('http://bytes.example.com:8000'),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+    });
+
+    group('malformed JSON responses', () {
+      Future<void> expectInvalidJsonResponse(
+        String body, {
+        String? messageContains,
+      }) async {
+        final mockClient = MockClient(
+          (request) async => http.Response(body, 200),
+        );
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://bad-json.example.com:8000',
+        );
+
+        final messageParts = <Matcher>[
+          contains('Invalid response from'),
+          contains('http://bad-json.example.com:8000'),
+          if (messageContains != null) contains(messageContains),
+        ];
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.message, 'message', allOf(messageParts))
                 .having((e) => e.statusCode, 'statusCode', 502),
           ),
         );
@@ -396,7 +631,46 @@ void main() {
       test(
         'a JSON array body produces an ApiException with status 502',
         () async {
-          await expectInvalidJsonResponse('[1,2]');
+          // The body is valid JSON but not a map, so the response-structure
+          // check reports it. This distinguishes it from the TypeError path,
+          // which reports an unexpected response shape.
+          await expectInvalidJsonResponse(
+            '[1,2]',
+            messageContains: 'Invalid JSON response',
+          );
+        },
+      );
+
+      test(
+        'a 200 whose classes field is not a list produces an ApiException 502',
+        () async {
+          // Dedicated (non-helper) assertion: pins the TypeError-specific
+          // message so this test fails if the `on TypeError` catch is
+          // removed and the FormatException path silently takes over.
+          final mockClient = MockClient(
+            (request) async => http.Response('{"classes": "not-a-list"}', 200),
+          );
+          final apiClient = ApiClient(
+            client: mockClient,
+            baseUrl: 'http://bad-json.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Invalid response from'),
+                      contains('unexpected response shape'),
+                      contains('http://bad-json.example.com:8000'),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
         },
       );
     });

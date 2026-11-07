@@ -27,6 +27,8 @@ dev = [
     "httpx>=0.26.0,<1.0.0",
     "ruff>=0.1.0,<1.0.0",
     "black>=23.0.0,<27.0.0",
+    # The CI workflow contract is asserted by parsing the workflow YAML.
+    "pyyaml>=6.0,<7.0.0",
 ]
 
 [build-system]
