@@ -106,17 +106,19 @@ matching Plane work item.
 - **Finding:** (1) Both workflows save the same key on the same ref, so the
   second one hits a reservation race and re-downloads 162 MB; (2) the `v2` key
   is immutable, so a future corruption can never be repaired in place; (3) the
-  mirror selector `web/2020id_/` is a closest-capture selector rather than a
-  pinned capture id.
-- **Fix:** Use one cache key per workflow, allow the save step to write a
-  repair key, and pin the archive.org capture id.
+  mirror selector `web/2020id_/` was a closest-capture selector rather than a
+  pinned capture id — PR #30 pinned the capture id
+  (`web/20201130004040id_/`), so the mirror cannot start serving different
+  bytes later.
+- **Fix:** Use one cache key per workflow and allow the save step to write a
+  repair key. The pinned capture id is delivered by PR #30.
 
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:221`,
-  `lib/services/api_client.dart:226`,
-  `lib/services/api_client.dart:238`
+- **Location:** `lib/services/api_client.dart:239`,
+  `lib/services/api_client.dart:244`,
+  `lib/services/api_client.dart:251`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -126,11 +128,11 @@ matching Plane work item.
 - **Fix:** Map each exception to the message that describes its real cause.
 - **Delivered in PR #30:** a missing image file is now reported as
   `Could not read the image file: ...` (status 400) before the request is
-  sent, and an `ArgumentError` is reported as `Invalid request to ...` with a
-  null-safe message. A file that exists but cannot be read only fails while
-  the request body is streamed, so it is still reported as an I/O error. The
-  remaining part of the finding — the `FormatException` arm of the request
-  builder — stays open in IC-77.
+  sent, a file that exists but cannot be read is reported the same way when
+  the request body is streamed (`lib/services/api_client.dart:138`), and an
+  `ArgumentError` is reported as `Invalid request to ...` with a null-safe
+  message. The remaining part of the finding — the `FormatException` arm of the
+  request builder — stays open in IC-77.
 - **Note:** The port bound at `lib/config.dart:239` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
@@ -139,11 +141,13 @@ matching Plane work item.
 ## README-PINNED — stale pinned-build documentation
 
 - **Plane:** IC-78
-- **Location:** `README.md:141-143`
+- **Location:** `README.md:140-146`
 - **Finding:** The README still says the runtime override is ignored when a
   compile-time override is present, but a pinned build can no longer create one
   (Save is disabled and `Config` throws).
-- **Fix:** Document the pinned-build behaviour.
+- **Fix:** **Delivered by PR #30** — the README now states that a pinned build
+  disables Save, refuses to store a runtime override, and that only a build
+  without a compile-time override can store one.
 
 ## DOC-DRIFT — stale Config.apiBaseUrl references and empty CHANGELOG
 
@@ -220,6 +224,11 @@ matching Plane work item.
   path, or map the caught error to a user-facing message that does not expose
   the raw error text. The arm must stay broad enough to keep the provider out
   of a permanently stuck loading state.
+- **Delivered by PR #30:** the provider now catches a `TypeError` with the
+  fixed message "The backend returned an unexpected response." and every other
+  `Error` with "The prediction failed with an unexpected error." The raw error
+  text is no longer shown, and the provider still never stays in a stuck
+  loading state.
 
 ## CURL-HARNESS-RANGE — the stubbed curl ignores the requested byte range
 
@@ -252,8 +261,7 @@ matching Plane work item.
 ## CURL-RETRY-RANGE — curl's automatic retry is not byte-safe with -C -
 
 - **Plane:** IC-86
-- **Location:** `backend/scripts/fetch_cifar10.sh` (the `curl -fL -C - --retry 3
-  --retry-all-errors` call)
+- **Location:** `backend/scripts/fetch_cifar10.sh` (the `curl -fL -C -` call)
 - **Finding:** Some curl builds re-send bytes when an automatic retry follows a
   partial transfer, so a resumed download may not be byte-exact. The archive
   integrity is unaffected: the pinned md5 and sha256 reject a corrupt file and
@@ -262,14 +270,21 @@ matching Plane work item.
 - **Fix:** Download the remaining range in explicit chunks, or drop the
   automatic retries and rely on the per-source attempt loop, which already
   resumes from the partial file.
+- **Delivered by PR #30:** the automatic retries are dropped (`--retry` and
+  `--retry-all-errors` are no longer passed), so a resumed transfer is never
+  spliced. The per-source attempt loop retries with a fresh resume, and a test
+  pins that the automatic retry flags stay absent.
 
 ## CURL-TIMEOUT-KILL — the per-attempt timeout waits for a stubborn child
 
 - **Plane:** IC-85
-- **Location:** `backend/scripts/fetch_cifar10.sh` (the `timeout "$TIMEOUT"`
-  wrapper)
+- **Location:** `backend/scripts/fetch_cifar10.sh` (the `timeout --kill-after=30
+  "$TIMEOUT"` wrapper)
 - **Finding:** `timeout` without `--kill-after` keeps waiting for a child that
   ignores `SIGTERM`. `curl` handles `SIGTERM`, so the practical risk is low,
   but a wedged child would hold the job past its budget.
 - **Fix:** Add `--kill-after` to the `timeout` call so the attempt is bounded
   even if the child does not exit on `SIGTERM`.
+- **Delivered by PR #30:** the wrapper now uses
+  `timeout --kill-after=30 "$TIMEOUT"`, so an attempt cannot outlive its
+  budget by 30 s even when the child ignores `SIGTERM`.
