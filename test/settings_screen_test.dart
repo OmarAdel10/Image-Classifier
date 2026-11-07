@@ -322,6 +322,9 @@ void main() {
       await tapButton('Reset to Default');
 
       expect(find.textContaining('Could not reset'), findsOneWidget);
+      // The reset failure names the error that caused it, like the other
+      // failure messages on this screen.
+      expect(find.textContaining('Provider<ApiClient>'), findsOneWidget);
     });
 
     testWidgets('reports a storage refusal instead of claiming success', (

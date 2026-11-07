@@ -170,7 +170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _statusIsError = true;
-        _statusMessage = 'Could not reset the stored URL: $e';
+        _statusMessage = 'Could not reset the stored URL: ${_describeError(e)}';
       });
       return;
     }
