@@ -59,6 +59,12 @@ void main() {
       expect(Config.isValidApiBaseUrl('/api/v1'), isFalse);
     });
 
+    test('rejects a negative port', () {
+      // The Uri parser keeps a negative port, so the port range check has to
+      // reject it explicitly.
+      expect(Config.isValidApiBaseUrl('http://example.com:-1'), isFalse);
+    });
+
     test('rejects malformed and empty strings', () {
       expect(Config.isValidApiBaseUrl('not a url :://'), isFalse);
       expect(Config.isValidApiBaseUrl(''), isFalse);
