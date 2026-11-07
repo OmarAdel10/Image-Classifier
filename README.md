@@ -138,9 +138,12 @@ flutter run -d linux \
 The backend address is resolved in this order:
 
 1. **Compile-time override** — `--dart-define=API_BASE_URL=...`. Always wins.
+   Such a build is **pinned**: the settings screen disables **Save** and the
+   app refuses to store a runtime override, so the address cannot change
+   behind the flag.
 2. **Runtime override** — set in the app via the ⚙ *Backend Settings* screen
-   (gear icon in the app bar). Persisted with `shared_preferences` and
-   ignored when a compile-time override is present.
+   (gear icon in the app bar). Persisted with `shared_preferences`. Only a
+   build without a compile-time override can store one.
 3. **Platform default** — depends on the target:
    - Linux / Windows / macOS desktop → `http://localhost:8000`
    - Android emulator → `http://10.0.2.2:8000`
