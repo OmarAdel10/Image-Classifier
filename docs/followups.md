@@ -116,9 +116,9 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:261`,
-  `lib/services/api_client.dart:266`,
-  `lib/services/api_client.dart:273`
+- **Location:** `lib/services/api_client.dart:269`,
+  `lib/services/api_client.dart:274`,
+  `lib/services/api_client.dart:281`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -132,13 +132,16 @@ matching Plane work item.
   the request body is streamed (`lib/services/api_client.dart:138`), a response
   body that cannot be read is reported as `Could not read the response from
   ...` (status 502) instead of `Connection to ... failed`
-  (`lib/services/api_client.dart:150`), and an `ArgumentError` is reported as
+  (`lib/services/api_client.dart:151`), a response body that never ends is
+  reported as a timeout (status 408) instead of hanging the request
+  (`lib/services/api_client.dart:151`, `lib/services/api_client.dart:200`),
+  and an `ArgumentError` is reported as
   `Invalid request to ...` with a null-safe message. The remaining part of the
   finding — the `FormatException` arm of the request builder — stays open in
   IC-77.
 - **Still open in IC-77:** the `http.ClientException` and `IOException` arms
   of the request builder still embed the raw exception text
-  (`lib/services/api_client.dart:244-250`, `lib/services/api_client.dart:256-260`),
+  (`lib/services/api_client.dart:252-258`, `lib/services/api_client.dart:264-268`),
   so a TLS failure shows `HandshakeException: ...` in the user-facing message.
   The fixed wording would be `Connection to <url> failed. Check that the
   backend is running and reachable from this device.`
@@ -353,3 +356,31 @@ matching Plane work item.
   the `ClientException` arm names the exception message, the `IOException` arm
   names the whole exception.
 - **Fix:** Map every transport failure to one status code and one message.
+
+## IMAGE-SIZE — the rejection message does not name the size of the file
+
+- **Plane:** IC-92
+- **Location:** `lib/services/image_service.dart`
+- **Finding:** The image validation rejects a file with `the file is larger than
+  the 10485760 byte limit`, so the user sees the limit but not how large the
+  selected file actually was.
+- **Fix:** Name the size of the rejected file in the message.
+
+## SETTINGS-EMPTY-FIELD — a cleared URL field is refilled with the stored URL
+
+- **Plane:** IC-93
+- **Location:** `lib/screens/settings_screen.dart:49-56`
+- **Finding:** The stored URL is loaded asynchronously. If the user types a URL
+  and clears the field before the load finishes, the late load writes the
+  stored URL back into the field.
+- **Fix:** Track whether the user edited the field and skip the late write
+  when they did.
+
+## SCRIPT-LINT — the download script is not linted by shellcheck
+
+- **Plane:** IC-94
+- **Location:** `backend/scripts/fetch_cifar10.sh`
+- **Finding:** The script is covered by the contract tests in
+  `backend/tests/test_ci_cifar_script.py`, but no shell linter runs over it, so
+  a shellcheck finding only shows up during review.
+- **Fix:** Add a shellcheck step to the backend CI workflow.
