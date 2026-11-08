@@ -6,17 +6,18 @@
 
 import 'dart:async' as _i8;
 import 'dart:io' as _i2;
-import 'dart:ui' as _i12;
+import 'dart:typed_data' as _i11;
+import 'dart:ui' as _i13;
 
 import 'package:cross_file/cross_file.dart' as _i9;
 import 'package:http/http.dart' as _i3;
 import 'package:image_classifier/models/model_info.dart' as _i4;
 import 'package:image_classifier/models/prediction.dart' as _i5;
-import 'package:image_classifier/providers/prediction_provider.dart' as _i10;
+import 'package:image_classifier/providers/prediction_provider.dart' as _i12;
 import 'package:image_classifier/services/api_client.dart' as _i6;
 import 'package:image_classifier/services/image_service.dart' as _i7;
 import 'package:mockito/mockito.dart' as _i1;
-import 'package:mockito/src/dummies.dart' as _i11;
+import 'package:mockito/src/dummies.dart' as _i10;
 
 // ignore_for_file: type=lint
 // ignore_for_file: avoid_redundant_argument_values
@@ -75,13 +76,18 @@ class MockImageService extends _i1.Mock implements _i7.ImageService {
   ) as _i8.Future<_i9.XFile?>);
 
   @override
-  _i8.Future<_i2.File> validateAndCompress(_i2.File? file) =>
-      (super.noSuchMethod(
-        Invocation.method(#validateAndCompress, [file]),
-        returnValue: _i8.Future<_i2.File>.value(
-          _FakeFile_0(this, Invocation.method(#validateAndCompress, [file])),
-        ),
-      ) as _i8.Future<_i2.File>);
+  _i8.Future<_i2.File> validateAndCompress(
+    _i2.File? file, {
+    int? maxBytes = 10485760,
+  }) => (super.noSuchMethod(
+    Invocation.method(#validateAndCompress, [file], {#maxBytes: maxBytes}),
+    returnValue: _i8.Future<_i2.File>.value(
+      _FakeFile_0(
+        this,
+        Invocation.method(#validateAndCompress, [file], {#maxBytes: maxBytes}),
+      ),
+    ),
+  ) as _i8.Future<_i2.File>);
 }
 
 /// A class which mocks [ApiClient].
@@ -99,10 +105,30 @@ class MockApiClient extends _i1.Mock implements _i6.ApiClient {
   ) as _i3.Client);
 
   @override
+  _i8.Future<String> get baseUrl => (super.noSuchMethod(
+    Invocation.getter(#baseUrl),
+    returnValue: _i8.Future<String>.value(
+      _i10.dummyValue<String>(this, Invocation.getter(#baseUrl)),
+    ),
+  ) as _i8.Future<String>);
+
+  @override
+  void invalidateBaseUrlCache() => super.noSuchMethod(
+    Invocation.method(#invalidateBaseUrlCache, []),
+    returnValueForMissingStub: null,
+  );
+
+  @override
   _i8.Future<bool> healthCheck() => (super.noSuchMethod(
     Invocation.method(#healthCheck, []),
     returnValue: _i8.Future<bool>.value(false),
   ) as _i8.Future<bool>);
+
+  @override
+  _i8.Future<int?> healthStatusCode() => (super.noSuchMethod(
+    Invocation.method(#healthStatusCode, []),
+    returnValue: _i8.Future<int?>.value(),
+  ) as _i8.Future<int?>);
 
   @override
   _i8.Future<_i4.ModelInfo> getModelInfo() => (super.noSuchMethod(
@@ -137,6 +163,20 @@ class MockApiClient extends _i1.Mock implements _i6.ApiClient {
       ) as _i8.Future<_i5.PredictionResponse>);
 
   @override
+  _i8.Future<_i5.PredictionResponse> predictBytes(
+    _i11.Uint8List? bytes,
+    String? fileName,
+  ) => (super.noSuchMethod(
+    Invocation.method(#predictBytes, [bytes, fileName]),
+    returnValue: _i8.Future<_i5.PredictionResponse>.value(
+      _FakePredictionResponse_3(
+        this,
+        Invocation.method(#predictBytes, [bytes, fileName]),
+      ),
+    ),
+  ) as _i8.Future<_i5.PredictionResponse>);
+
+  @override
   _i8.Future<void> dispose() => (super.noSuchMethod(
     Invocation.method(#dispose, []),
     returnValue: _i8.Future<void>.value(),
@@ -148,7 +188,7 @@ class MockApiClient extends _i1.Mock implements _i6.ApiClient {
 ///
 /// See the documentation for Mockito's code generation for more information.
 class MockPredictionProvider extends _i1.Mock
-    implements _i10.PredictionProvider {
+    implements _i12.PredictionProvider {
   MockPredictionProvider() {
     _i1.throwOnMissingStub(this);
   }
@@ -160,13 +200,13 @@ class MockPredictionProvider extends _i1.Mock
   ) as _i6.ApiClient);
 
   @override
-  _i10.PredictionState get state => (super.noSuchMethod(
+  _i12.PredictionState get state => (super.noSuchMethod(
     Invocation.getter(#state),
-    returnValue: _i11.dummyValue<_i10.PredictionState>(
+    returnValue: _i10.dummyValue<_i12.PredictionState>(
       this,
       Invocation.getter(#state),
     ),
-  ) as _i10.PredictionState);
+  ) as _i12.PredictionState);
 
   @override
   bool get hasListeners =>
@@ -187,13 +227,13 @@ class MockPredictionProvider extends _i1.Mock
   );
 
   @override
-  void addListener(_i12.VoidCallback? listener) => super.noSuchMethod(
+  void addListener(_i13.VoidCallback? listener) => super.noSuchMethod(
     Invocation.method(#addListener, [listener]),
     returnValueForMissingStub: null,
   );
 
   @override
-  void removeListener(_i12.VoidCallback? listener) => super.noSuchMethod(
+  void removeListener(_i13.VoidCallback? listener) => super.noSuchMethod(
     Invocation.method(#removeListener, [listener]),
     returnValueForMissingStub: null,
   );

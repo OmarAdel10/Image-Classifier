@@ -70,19 +70,27 @@ class ImageService {
   /// Validates and compresses an image file for upload.
   ///
   /// Checks:
-  /// - File size <= [Config.maxImageSizeBytes]
+  /// - File size <= [maxBytes]
   /// - Valid image format (PNG, JPEG)
   /// - Resizes if dimensions exceed 1024px
   /// - Re-encodes as JPEG at 85% quality
   ///
+  /// [maxBytes] is the limit for the input file and for the compressed
+  /// result. It defaults to [Config.maxImageSizeBytes] and is a parameter so
+  /// that the limit can be lowered in a test, where the compressed size
+  /// cannot be made to exceed the shipped limit.
+  ///
   /// Returns the compressed image file.
   /// Throws [ImageValidationException] if validation fails.
-  Future<File> validateAndCompress(File file) async {
+  Future<File> validateAndCompress(
+    File file, {
+    int maxBytes = Config.maxImageSizeBytes,
+  }) async {
     // Check file size
     final fileSize = await file.length();
-    if (fileSize > Config.maxImageSizeBytes) {
+    if (fileSize > maxBytes) {
       throw ImageValidationException(
-        'the file is larger than the ${Config.maxImageSizeBytes} byte limit',
+        'the file is larger than the $maxBytes byte limit',
       );
     }
 
@@ -110,7 +118,7 @@ class ImageService {
     final jpegBytes = img.encodeJpg(resized, quality: 85);
 
     // Check compressed size
-    if (jpegBytes.length > Config.maxImageSizeBytes) {
+    if (jpegBytes.length > maxBytes) {
       throw ImageValidationException(
         'the compressed image is larger than the size limit',
       );

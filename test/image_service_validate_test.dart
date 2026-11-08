@@ -148,6 +148,31 @@ void main() {
       expect(image.height, 6);
     });
 
+    test('rejects a compressed image that is larger than the limit', () async {
+      // A gradient is used because its JPEG is larger than its PNG (about
+      // 51 KB against 22 KB), so the limit can sit between the two sizes:
+      // the input passes the check, the compressed result does not.
+      final gradient = img.Image(width: 1024, height: 1024);
+      for (final pixel in gradient) {
+        pixel.r = (pixel.x * 255 / 1024).round();
+        pixel.g = (pixel.y * 255 / 1024).round();
+        pixel.b = ((pixel.x + pixel.y) * 255 / 2048).round();
+      }
+      final file = _writeTempFile('gradient.png', img.encodePng(gradient));
+      final limit = file.lengthSync();
+
+      await expectLater(
+        service.validateAndCompress(file, maxBytes: limit),
+        throwsA(
+          isA<ImageValidationException>().having(
+            (e) => e.message,
+            'message',
+            'the compressed image is larger than the size limit',
+          ),
+        ),
+      );
+    });
+
     test('writes the result into a temporary JPEG file', () async {
       final file = _writeTempFile('image.png', _pngBytes(4, 4));
 
