@@ -63,6 +63,11 @@ jobs:
         # is a single source of truth for both workflows and is covered by
         # backend/tests/test_ci_cifar_script.py.
         working-directory: backend
+        env:
+          # The expected digests are pinned here as well, so the archive CI
+          # accepts cannot change silently with the script defaults.
+          CIFAR10_MD5: c58f30108f718f92721af3b95e74349a
+          CIFAR10_SHA256: 6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce
         run: bash scripts/fetch_cifar10.sh /home/runner/.cache/cnn-cifar10
 
       - name: Save verified CIFAR-10 dataset cache

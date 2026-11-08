@@ -78,7 +78,10 @@ else
   while IFS= read -r url; do
     # A blank or whitespace-only line is not a source.
     [[ -n "${url//[[:space:]]/}" ]] || continue
-    echo "Downloading CIFAR-10 from $url"
+    # The source is written to the CI log, so the workflow command syntax is
+    # removed from the logged copy. The download itself still uses the
+    # original source.
+    echo "Downloading CIFAR-10 from ${url//::/}"
     for attempt in $(seq 1 "$ATTEMPTS"); do
       # No --retry: an automatic retry of a resumed transfer can re-send
       # bytes and splice the file. The attempt loop above retries with a

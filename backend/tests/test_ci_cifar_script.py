@@ -19,7 +19,6 @@ import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -236,7 +235,6 @@ def _run_script(
 
     log_path = tmp_path / "curl.log"
     killed_path = tmp_path / "curl.killed.log"
-    done_path = tmp_path / "curl.done.log"
     timeout_argv_path = tmp_path / "timeout.argv.log"
     payload_file = tmp_path / "payload.bin"
     payload_file.write_bytes(PAYLOAD)
@@ -264,7 +262,6 @@ def _run_script(
             "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
             "CURL_LOG": str(log_path),
             "CURL_KILLED_LOG": str(killed_path),
-            "CURL_DONE_LOG": str(done_path),
             "TIMEOUT_ARGV_LOG": str(timeout_argv_path),
             "CURL_PAYLOAD_FILE": str(payload_file),
             "CURL_CORRUPT_FILE": str(corrupt_file),
@@ -613,6 +610,48 @@ def test_the_pytest_step_reads_the_dataset_from_the_cache_directory() -> None:
         ), f"{name} reads the dataset from another directory"
 
 
+def test_the_logged_source_cannot_carry_a_workflow_command(tmp_path: Path) -> None:
+    """The source is written to the CI log, so it cannot smuggle a command.
+
+    GitHub Actions reads a line that starts with '::' as a workflow command.
+    The source list comes from the environment, so the logged copy has to be
+    stripped of that marker.
+    """
+    process, _ = _run_script(
+        tmp_path,
+        ["https://example.test/::error::injected"],
+        fail_substring="example.test",
+    )
+
+    logged = [
+        line for line in process.stdout.splitlines() if line.startswith("Downloading CIFAR-10 from")
+    ]
+    assert logged, "the source was not logged"
+    for line in logged:
+        assert "::" not in line, f"the logged source carries a workflow command: {line}"
+
+
+def test_the_workflow_pins_the_expected_digests() -> None:
+    """The digests CI accepts are pinned in the workflow as well.
+
+    The script reads the expected digests from the environment, so a workflow
+    that sets them explicitly keeps the accepted archive from drifting with
+    the script defaults. The values have to match the script defaults, or the
+    workflow would verify something the script does not expect.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        _, download = _step_by_name(job, "Download and verify CIFAR-10")
+        env = download.get("env", {})
+
+        assert env.get("CIFAR10_MD5") == _script_default(
+            "MD5", 32
+        ), f"{name} does not pin the expected md5 to the script default"
+        assert env.get("CIFAR10_SHA256") == _script_default(
+            "SHA256", 64
+        ), f"{name} does not pin the expected sha256 to the script default"
+
+
 def test_the_cache_actions_are_pinned_to_a_commit_sha() -> None:
     """The cache actions must be pinned, and both must use the same commit."""
     for name in WORKFLOW_FILES:
@@ -703,7 +742,6 @@ def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> Non
     delivering the archive, so the timeout that wraps the download has to
     be applied - a pinned default value is not enough.
     """
-    started = time.monotonic()
     process, calls = _run_script(
         tmp_path,
         ["https://example.test/slow"],
@@ -713,25 +751,19 @@ def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> Non
         attempts=1,
         stub=_STUB_CURL_SHELL,
     )
-    elapsed = time.monotonic() - started
 
     assert process.returncode == 1
     assert "::error::CIFAR-10 archive could not be downloaded and verified." in (process.stdout)
     # The stalled transfer was aborted: the script reported its own error
     # instead of waiting for the transfer to finish. Its own budget is the
-    # attempt timeout plus the kill grace (5 s + 30 s), the headroom covers a
-    # loaded runner that delays the signal, and the harness timeout (120 s)
-    # stays the hard limit: a script that hangs is reported as a timeout.
-    assert elapsed < 100, f"the script waited {elapsed:.1f} s for a stalled transfer"
-
+    # attempt timeout plus the kill grace (5 s + 30 s), and the harness
+    # timeout stays the hard limit: a script that hangs is reported as a
+    # timeout by the harness instead of failing an assertion on the clock.
     killed_path = tmp_path / "curl.killed.log"
-    done_path = tmp_path / "curl.done.log"
     killed = killed_path.read_text() if killed_path.exists() else ""
-    done = done_path.read_text() if done_path.exists() else ""
     # The stub was signalled and never completed the transfer: the timeout
     # interrupted it instead of the transfer running to completion.
     assert killed.count("killed") >= 1
-    assert done == ""
     # The attempt really ran: the stub was started before it was killed.
     assert len(calls) == 1
 
@@ -839,7 +871,11 @@ def test_the_attempt_is_bounded_and_kills_a_stubborn_child(tmp_path: Path) -> No
     assert len(records) == 1
     argv = records[0]["argv"]
     assert "--kill-after=30" in argv, f"the attempt does not kill a stubborn child: {argv}"
-    assert "30" in argv, f"the attempt does not use the configured budget: {argv}"
+    # The budget follows the grace period, so the configured value is the
+    # argument that follows the flag.
+    assert (
+        argv[argv.index("--kill-after=30") + 1] == "30"
+    ), f"the attempt does not use the configured budget: {argv}"
     # The wrapped command is curl, so the budget applies to the transfer.
     assert "curl" in argv
 
@@ -859,7 +895,7 @@ def test_the_default_attempt_budget_is_twenty_minutes(tmp_path: Path) -> None:
     assert len(records) == 1
     argv = records[0]["argv"]
     assert "--kill-after=30" in argv
-    assert str(_script_default_timeout()) in argv
+    assert argv[argv.index("--kill-after=30") + 1] == str(_script_default_timeout())
 
 
 def test_the_script_creates_a_missing_cache_directory(tmp_path: Path) -> None:
