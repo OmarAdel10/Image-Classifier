@@ -11,6 +11,7 @@ import 'support/refusing_write_prefs_store.dart';
 import 'support/reload_throwing_prefs_store.dart';
 import 'support/throwing_write_back_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
+import 'support/throwing_removing_prefs_store.dart';
 import 'support/throwing_write_prefs_store.dart';
 
 void main() {
@@ -592,6 +593,34 @@ void main() {
       });
 
       test('the stored URL is not active after the refused removal', () async {
+        expect(await Config.clearApiBaseUrl(), isFalse);
+
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
+    });
+
+    group('clearApiBaseUrl when the platform throws while removing', () {
+      setUp(() {
+        SharedPreferencesStorePlatform.instance = ThrowingRemovingPrefsStore({
+          'flutter.${Config.apiBaseUrlPrefsKey}':
+              'http://stored.example.com:1234',
+        });
+        SharedPreferences.resetStatic();
+      });
+
+      tearDown(() {
+        // Restore a working in-memory store for the remaining tests.
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('reports the failure without throwing', () async {
+        expect(await Config.clearApiBaseUrl(), isFalse);
+      });
+
+      test('the stored URL is not active after the failed removal', () async {
         expect(await Config.clearApiBaseUrl(), isFalse);
 
         expect(
