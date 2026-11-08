@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
+import 'support/delayed_mutation_prefs_store.dart';
 import 'support/delayed_prefs_store.dart';
 import 'support/false_prefs_store.dart';
 import 'support/false_removing_prefs_store.dart';
@@ -822,5 +824,99 @@ void main() {
         expect(probeButton.onPressed, isNotNull);
       },
     );
+
+    group('unmounted while a request is in flight', () {
+      testWidgets(
+        'a probe that finishes after the screen is closed is ignored',
+        (WidgetTester tester) async {
+          final gate = Completer<void>();
+          final gatedClient = MockClient((request) async {
+            await gate.future;
+            return http.Response('{}', 200);
+          });
+
+          await tester.pumpWidget(_buildSettingsScreen(gatedClient).widget);
+          await tester.pumpAndSettle();
+
+          await tester.tap(_buttonWithLabel('Test Connection'));
+          await tester.pump();
+
+          // The screen is closed while the probe is still running.
+          await tester.pumpWidget(const SizedBox.shrink());
+
+          gate.complete();
+          await tester.pump();
+          await tester.pump();
+
+          // The late result must not touch the closed screen.
+          expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
+        'a save that finishes after the screen is closed is ignored',
+        (WidgetTester tester) async {
+          final store = DelayedMutationPrefsStore({});
+          SharedPreferencesStorePlatform.instance = store;
+          SharedPreferences.resetStatic();
+
+          await tester.pumpWidget(
+            _buildSettingsScreen(
+              MockClient((request) async => http.Response('{}', 200)),
+            ).widget,
+          );
+          await tester.pumpAndSettle();
+
+          await tester.enterText(
+            find.byType(TextField),
+            'http://saved.example.com:9000',
+          );
+          await tester.pump();
+          await tester.tap(_buttonWithLabel('Save'));
+          await tester.pump();
+
+          // The screen is closed while the write is still running.
+          await tester.pumpWidget(const SizedBox.shrink());
+
+          store.releaseWrite();
+          await tester.pump();
+          await tester.pump();
+
+          // The late result must not touch the closed screen.
+          expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
+        'a reset that finishes after the screen is closed is ignored',
+        (WidgetTester tester) async {
+          final store = DelayedMutationPrefsStore({
+            'flutter.${Config.apiBaseUrlPrefsKey}':
+                'http://stored.example.com:1234',
+          });
+          SharedPreferencesStorePlatform.instance = store;
+          SharedPreferences.resetStatic();
+
+          await tester.pumpWidget(
+            _buildSettingsScreen(
+              MockClient((request) async => http.Response('{}', 200)),
+            ).widget,
+          );
+          await tester.pumpAndSettle();
+
+          await tester.tap(_buttonWithLabel('Reset to Default'));
+          await tester.pump();
+
+          // The screen is closed while the removal is still running.
+          await tester.pumpWidget(const SizedBox.shrink());
+
+          store.releaseRemoval();
+          await tester.pumpAndSettle();
+
+          // The late result must not touch the closed screen.
+          expect(tester.takeException(), isNull);
+        },
+      );
+    });
   });
 }
