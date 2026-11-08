@@ -116,9 +116,9 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:239`,
-  `lib/services/api_client.dart:244`,
-  `lib/services/api_client.dart:251`
+- **Location:** `lib/services/api_client.dart:261`,
+  `lib/services/api_client.dart:266`,
+  `lib/services/api_client.dart:273`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -129,10 +129,13 @@ matching Plane work item.
 - **Delivered in PR #30:** a missing image file is now reported as
   `Could not read the image file: ...` (status 400) before the request is
   sent, a file that exists but cannot be read is reported the same way when
-  the request body is streamed (`lib/services/api_client.dart:138`), and an
-  `ArgumentError` is reported as `Invalid request to ...` with a null-safe
-  message. The remaining part of the finding — the `FormatException` arm of the
-  request builder — stays open in IC-77.
+  the request body is streamed (`lib/services/api_client.dart:138`), a response
+  body that cannot be read is reported as `Could not read the response from
+  ...` (status 502) instead of `Connection to ... failed`
+  (`lib/services/api_client.dart:150`), and an `ArgumentError` is reported as
+  `Invalid request to ...` with a null-safe message. The remaining part of the
+  finding — the `FormatException` arm of the request builder — stays open in
+  IC-77.
 - **Note:** The port bound at `lib/config.dart:239` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
@@ -216,7 +219,7 @@ matching Plane work item.
 ## PREDICTION-ERROR-CATCH — the provider catches every Error subtype
 
 - **Plane:** IC-82
-- **Location:** `lib/providers/prediction_provider.dart:61`
+- **Location:** `lib/providers/prediction_provider.dart:59`
 - **Finding:** The `on Error` arm of the prediction request catches every
   `Error` subtype — `AssertionError`, `OutOfMemoryError` and a failing
   `TypeError` alike — and surfaces `e.toString()` to the user.
@@ -225,10 +228,10 @@ matching Plane work item.
   the raw error text. The arm must stay broad enough to keep the provider out
   of a permanently stuck loading state.
 - **Delivered by PR #30:** the provider now catches a `TypeError` with the
-  fixed message "The backend returned an unexpected response." and every other
-  `Error` with "The prediction failed with an unexpected error." The raw error
-  text is no longer shown, and the provider still never stays in a stuck
-  loading state.
+  fixed message "The backend returned an unexpected response.", every other
+  `Error` with "The prediction failed with an unexpected error." and a plain
+  `Exception` with "The prediction failed.". The raw error text is no longer
+  shown, and the provider still never stays in a stuck loading state.
 
 ## CURL-HARNESS-RANGE — the stubbed curl ignores the requested byte range
 
@@ -288,3 +291,47 @@ matching Plane work item.
 - **Delivered by PR #30:** the wrapper now uses
   `timeout --kill-after=30 "$TIMEOUT"`, so an attempt cannot outlive its
   budget by 30 s even when the child ignores `SIGTERM`.
+
+## SNACKBAR-QUEUE — hiding a snackbar does not clear the queued ones
+
+- **Plane:** IC-87
+- **Location:** `lib/screens/home_screen.dart:251`,
+  `lib/screens/home_screen.dart:268`
+- **Finding:** `ScaffoldMessengerState.hideCurrentSnackBar()` reverse-animates
+  the visible bar but does not remove it from the queue, so a burst of errors
+  can leave more than one bar queued and the new message waits for the exit
+  animation of the old one.
+- **Fix:** Use `clearSnackBars()` before showing a message, or await the future
+  of `hideCurrentSnackBar()`.
+
+## CI-NETWORK-PATH — CI never exercises the download over the network
+
+- **Plane:** IC-88
+- **Location:** `.github/workflows/backend-ci.yml`
+- **Finding:** Every green CI run restored the CIFAR-10 cache, so the `curl`
+  path is covered only by the stubbed contract tests and by one local
+  end-to-end run. A regression that only shows up against the real mirror
+  would stay invisible until a cold cache happens.
+- **Fix:** Add a scheduled or manual cold-cache job that runs
+  `backend/scripts/fetch_cifar10.sh` against an empty cache.
+
+## SCRIPT-SHEBANG — the download script carries a shebang but is not executable
+
+- **Plane:** IC-89
+- **Location:** `backend/scripts/fetch_cifar10.sh:1`
+- **Finding:** The file starts with `#!/usr/bin/env bash` but is committed with
+  mode `100644` on purpose — a test pins that it must not be executable — so
+  the shebang suggests an invocation the contract forbids.
+- **Fix:** Drop the shebang, or state in the usage header that the script is
+  run with `bash`.
+
+## LOCK-PROVENANCE — requirements.lock does not list pyyaml as a direct dependency
+
+- **Plane:** IC-90
+- **Location:** `backend/requirements.lock:997`
+- **Finding:** `pyyaml` was added as a direct dev dependency in
+  `backend/pyproject.toml`, but the lock still records it as a transitive
+  dependency. The resolution is unchanged (`6.0.3`) and no workflow consumes
+  the lock, so the drift is cosmetic.
+- **Fix:** Regenerate the lock with
+  `uv pip compile pyproject.toml --extra dev --generate-hashes -o requirements.lock`.
