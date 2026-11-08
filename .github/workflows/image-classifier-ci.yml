@@ -108,8 +108,8 @@ jobs:
         # download under the immutable key poisoned every later run that
         # restored it (self-sustaining failure loop). The versioned key
         # retires the poisoned entry: the verified archive is written under
-        # the new key, so later runs hit it exactly. The save action reports
-        # a cache-reservation conflict as a warning and never fails the job
+        # the new key, so later runs hit it exactly. The save action logs
+        # a cache-reservation conflict and does not fail the job
         # on its own, so no continue-on-error mask is needed.
         if: success() && steps.cifar-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830

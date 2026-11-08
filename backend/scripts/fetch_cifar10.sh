@@ -28,7 +28,9 @@ ATTEMPTS="${CIFAR10_ATTEMPTS:-2}"
 # grace per attempt (4920 s = 82 min), which stays inside the 120 min job
 # timeout and leaves room for the setup and the test run. A larger
 # per-attempt budget would hit the job timeout instead of the script's own
-# error path, which reports the failed download.
+# error path, which reports the failed download. The budget only succeeds
+# when the mirror sustains roughly 35 KB/s or more; below that the script
+# stops with its own error instead of running past the job timeout.
 TIMEOUT="${CIFAR10_TIMEOUT:-1200}"
 # The archive.org capture is pinned to an immutable id instead of the
 # "2020id_" closest-capture selector, so the mirror cannot start serving
@@ -38,8 +40,17 @@ TIMEOUT="${CIFAR10_TIMEOUT:-1200}"
 # attempt 1 and finishes through the "-C -" resume on attempt 2. The
 # cs.toronto.edu origin is throttled further. Both sources are verified
 # against the pinned hashes above, so the mirror is verified, not trusted.
-URLS="${CIFAR10_URLS:-https://web.archive.org/web/20201130004040id_/https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
-https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz}"
+# The pinned production sources: the archive.org capture first, the
+# cs.toronto.edu origin as the fallback.
+DEFAULT_URLS="https://web.archive.org/web/20201130004040id_/https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
+https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
+URLS="${CIFAR10_URLS:-$DEFAULT_URLS}"
+# A source list that holds nothing but whitespace is empty: it falls back to
+# the pinned production sources instead of failing with a download error that
+# names the wrong cause.
+if [[ -z "${URLS//[[:space:]]/}" ]]; then
+  URLS="$DEFAULT_URLS"
+fi
 
 if ! [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
   echo "::error::CIFAR10_ATTEMPTS must be a positive integer, got '$ATTEMPTS'."
@@ -72,8 +83,11 @@ else
       # No --retry: an automatic retry of a resumed transfer can re-send
       # bytes and splice the file. The attempt loop above retries with a
       # fresh resume instead. --kill-after bounds a child that ignores the
-      # TERM signal, so an attempt cannot outlive its budget.
+      # TERM signal, so an attempt cannot outlive its budget. --proto and
+      # --proto-redir keep the transfer on HTTPS, so a redirect cannot move
+      # it into another scheme the curl build accepts by default.
       timeout --kill-after=30 "$TIMEOUT" curl -fL -C - \
+        --proto '=https' --proto-redir '=https' \
         --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
         -o cifar-10-python.tar.gz "$url" || true
       if verify; then

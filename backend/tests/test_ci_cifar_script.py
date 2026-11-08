@@ -194,7 +194,7 @@ def _write_stub_curl(bin_dir: Path, body: str = _STUB_CURL) -> None:
 
 def _default_source_count() -> int:
     """Returns the number of download sources the script uses by default."""
-    match = re.search(r"CIFAR10_URLS:-(.*?)\}", SCRIPT.read_text(), re.S)
+    match = re.search(r'DEFAULT_URLS="(.*?)"', SCRIPT.read_text(), re.S)
     assert match, "the script does not pin a default source list"
     return len([line for line in match.group(1).splitlines() if line.strip()])
 
@@ -757,7 +757,7 @@ def test_the_download_budget_fits_inside_the_job_timeout() -> None:
     text = SCRIPT.read_text()
     attempts = int(re.search(r"CIFAR10_ATTEMPTS:-(\d+)", text).group(1))
     per_attempt = int(re.search(r"CIFAR10_TIMEOUT:-(\d+)", text).group(1))
-    default_sources = re.search(r"CIFAR10_URLS:-(.*?)\}", text, re.S)
+    default_sources = re.search(r'DEFAULT_URLS="(.*?)"', text, re.S)
     assert default_sources, "the script does not pin a default source list"
     sources = len([line for line in default_sources.group(1).splitlines() if line.strip()])
 
@@ -798,6 +798,24 @@ def test_the_download_aborts_a_stalled_transfer(tmp_path: Path) -> None:
     # the file, so the script retries through its attempt loop instead.
     assert "--retry" not in argv
     assert "--retry-all-errors" not in argv
+
+
+def test_the_transfer_only_follows_https_redirects(tmp_path: Path) -> None:
+    """A redirect must not be able to move the download off HTTPS.
+
+    Both pinned sources are HTTPS, and the archive is verified against the
+    pinned digests, so a redirect cannot change the bytes. Restricting the
+    protocol keeps the transfer from following a redirect into a scheme the
+    curl build accepts by default.
+    """
+    process, calls = _run_script(tmp_path, ["https://example.test/good"])
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    argv = calls[0].argv
+    for flag in ("--proto", "--proto-redir"):
+        assert flag in argv, f"{flag} is missing from the curl call: {argv}"
+        value = argv[argv.index(flag) + 1]
+        assert value == "=https", f"{flag} must allow HTTPS only, got {value}"
 
 
 def test_the_attempt_is_bounded_and_kills_a_stubborn_child(tmp_path: Path) -> None:
@@ -988,6 +1006,22 @@ def test_an_empty_source_list_falls_back_to_the_production_sources(
 
     assert process.returncode == 0, process.stdout + process.stderr
     assert calls[0].url == MIRROR_URL
+
+
+def test_a_blank_source_list_falls_back_to_the_production_sources(
+    tmp_path: Path,
+) -> None:
+    """A source list that holds only whitespace is empty.
+
+    A list of blanks names no source at all, so it falls back to the pinned
+    production sources the way an empty list does. Failing instead would
+    report a download error for a list that never named a source.
+    """
+    for urls in (["   "], ["\n", "  \n"]):
+        process, calls = _run_script(tmp_path, urls)
+
+        assert process.returncode == 0, process.stdout + process.stderr
+        assert calls[0].url == MIRROR_URL
 
 
 def test_an_http_error_page_is_not_kept_as_the_archive(tmp_path: Path) -> None:
