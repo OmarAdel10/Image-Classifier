@@ -17,7 +17,7 @@ jobs:
   python-backend:
     name: Python Backend CI
     runs-on: ubuntu-24.04
-    timeout-minutes: 120  # first run downloads CIFAR-10 (~170MB); cached runs ~5 min
+    timeout-minutes: 120  # cold run downloads CIFAR-10 (~170 MB, ~37 min at ~80 KB/s); cached ~2 min
     permissions:
       contents: read
     steps:

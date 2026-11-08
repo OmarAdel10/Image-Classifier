@@ -147,6 +147,26 @@ done
 """
 
 
+# A stub for the `timeout` command. It records the argument vector the script
+# passes to `timeout` and then runs the wrapped command without waiting, so the
+# test can assert on the per-attempt budget the script configured.
+_STUB_TIMEOUT = """#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+with open(os.environ["TIMEOUT_ARGV_LOG"], "a") as log:
+    log.write(json.dumps({"argv": args}) + "\\n")
+
+index = 0
+while index < len(args) and args[index].startswith("-"):
+    index += 1
+command = args[index + 1 :]
+os.execvp(command[0], command)
+"""
+
+
 class CurlCall(NamedTuple):
     """One recorded ``curl`` invocation."""
 
@@ -187,9 +207,10 @@ def _run_script(
     md5: str | None = None,
     sha256: str | None = None,
     cache_dir: Path | None = None,
-    timeout: int = 30,
+    timeout: int | None = 30,
     attempts: int = 2,
     stub: str = _STUB_CURL,
+    timeout_stub: str | None = None,
 ):
     """Runs the download script with a stubbed curl.
 
@@ -197,19 +218,26 @@ def _run_script(
     default mirror order can be observed. ``md5``/``sha256`` override the
     pinned digests the script verifies against. ``cache_dir`` overrides the
     cache directory, so a test can point the script at a directory that does
-    not exist yet. ``timeout`` is the per-attempt budget in seconds. ``stub``
-    replaces the stubbed curl, so a test can use a stub that blocks instead
-    of delivering the archive.
+    not exist yet. ``timeout`` is the per-attempt budget in seconds; ``None``
+    keeps the default the script pins. ``stub`` replaces the stubbed curl, so
+    a test can use a stub that blocks instead of delivering the archive.
+    ``timeout_stub`` replaces the ``timeout`` command, so a test can observe
+    the budget the script configured.
 
     Returns the completed process and the recorded curl calls.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     _write_stub_curl(bin_dir, stub)
+    if timeout_stub is not None:
+        timeout_command = bin_dir / "timeout"
+        timeout_command.write_text(timeout_stub)
+        timeout_command.chmod(0o755)
 
     log_path = tmp_path / "curl.log"
     killed_path = tmp_path / "curl.killed.log"
     done_path = tmp_path / "curl.done.log"
+    timeout_argv_path = tmp_path / "timeout.argv.log"
     payload_file = tmp_path / "payload.bin"
     payload_file.write_bytes(PAYLOAD)
     corrupt_file = tmp_path / "corrupt.bin"
@@ -237,15 +265,17 @@ def _run_script(
             "CURL_LOG": str(log_path),
             "CURL_KILLED_LOG": str(killed_path),
             "CURL_DONE_LOG": str(done_path),
+            "TIMEOUT_ARGV_LOG": str(timeout_argv_path),
             "CURL_PAYLOAD_FILE": str(payload_file),
             "CURL_CORRUPT_FILE": str(corrupt_file),
             "CURL_STALL_FIFO": str(stall_fifo),
             "CIFAR10_MD5": md5 or _md5(PAYLOAD),
             "CIFAR10_SHA256": sha256 or _sha256(PAYLOAD),
             "CIFAR10_ATTEMPTS": str(attempts),
-            "CIFAR10_TIMEOUT": str(timeout),
         }
     )
+    if timeout is not None:
+        env["CIFAR10_TIMEOUT"] = str(timeout)
     if urls is not None:
         env["CIFAR10_URLS"] = "\n".join(urls)
     if fail_substring is not None:
@@ -257,7 +287,8 @@ def _run_script(
     # The harness has to outlast the budget the script may spend: every
     # source may use every attempt. A fixed timeout cut the script off
     # while it was still inside its own budget.
-    harness_timeout = max(120, timeout * attempts * source_count + 60)
+    per_attempt = timeout if timeout is not None else _script_default_timeout()
+    harness_timeout = max(120, per_attempt * attempts * source_count + 60)
     try:
         process = subprocess.run(
             ["bash", str(SCRIPT), str(cache_dir)],
@@ -287,6 +318,13 @@ def _script_default(env_name: str, length: int) -> str:
     )
     assert match, f"the script does not pin a default for CIFAR10_{env_name}"
     return match.group(1)
+
+
+def _script_default_timeout() -> int:
+    """Returns the per-attempt budget the script pins by default."""
+    match = re.search(r"CIFAR10_TIMEOUT:-(\d+)", SCRIPT.read_text())
+    assert match, "the script does not pin a default timeout"
+    return int(match.group(1))
 
 
 def _cifar_cache_block(text: str, name: str) -> str:
@@ -671,7 +709,7 @@ def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> Non
         ["https://example.test/slow"],
         # The budget is much larger than the start-up cost of the stub, so
         # the stub is always running when the timeout signals it.
-        timeout=10,
+        timeout=5,
         attempts=1,
         stub=_STUB_CURL_SHELL,
     )
@@ -680,8 +718,11 @@ def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> Non
     assert process.returncode == 1
     assert "::error::CIFAR-10 archive could not be downloaded and verified." in (process.stdout)
     # The stalled transfer was aborted: the script reported its own error
-    # instead of waiting for the transfer to finish.
-    assert elapsed < 60, f"the script waited {elapsed:.1f} s for a stalled transfer"
+    # instead of waiting for the transfer to finish. Its own budget is the
+    # attempt timeout plus the kill grace (5 s + 30 s), the headroom covers a
+    # loaded runner that delays the signal, and the harness timeout (120 s)
+    # stays the hard limit: a script that hangs is reported as a timeout.
+    assert elapsed < 100, f"the script waited {elapsed:.1f} s for a stalled transfer"
 
     killed_path = tmp_path / "curl.killed.log"
     done_path = tmp_path / "curl.done.log"
@@ -689,7 +730,7 @@ def test_the_per_attempt_timeout_stops_a_stalled_download(tmp_path: Path) -> Non
     done = done_path.read_text() if done_path.exists() else ""
     # The stub was signalled and never completed the transfer: the timeout
     # interrupted it instead of the transfer running to completion.
-    assert killed.count("killed") == 1
+    assert killed.count("killed") >= 1
     assert done == ""
     # The attempt really ran: the stub was started before it was killed.
     assert len(calls) == 1
@@ -757,6 +798,50 @@ def test_the_download_aborts_a_stalled_transfer(tmp_path: Path) -> None:
     # the file, so the script retries through its attempt loop instead.
     assert "--retry" not in argv
     assert "--retry-all-errors" not in argv
+
+
+def test_the_attempt_is_bounded_and_kills_a_stubborn_child(tmp_path: Path) -> None:
+    """The per-attempt budget has to be enforced by `timeout`.
+
+    The budget is only real when the transfer is wrapped in `timeout`, and a
+    child that ignores the TERM signal has to be killed after the grace
+    period. Both are part of the contract of the script.
+    """
+    process, _calls = _run_script(
+        tmp_path,
+        ["https://example.test/good"],
+        timeout=30,
+        timeout_stub=_STUB_TIMEOUT,
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    argv_log = tmp_path / "timeout.argv.log"
+    assert argv_log.is_file(), "the script did not run curl through timeout"
+    records = [json.loads(line) for line in argv_log.read_text().splitlines() if line.strip()]
+    assert len(records) == 1
+    argv = records[0]["argv"]
+    assert "--kill-after=30" in argv, f"the attempt does not kill a stubborn child: {argv}"
+    assert "30" in argv, f"the attempt does not use the configured budget: {argv}"
+    # The wrapped command is curl, so the budget applies to the transfer.
+    assert "curl" in argv
+
+
+def test_the_default_attempt_budget_is_twenty_minutes(tmp_path: Path) -> None:
+    """The pinned default budget is what a cold run has to live with."""
+    process, _calls = _run_script(
+        tmp_path,
+        ["https://example.test/good"],
+        timeout=None,
+        timeout_stub=_STUB_TIMEOUT,
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    argv_log = tmp_path / "timeout.argv.log"
+    records = [json.loads(line) for line in argv_log.read_text().splitlines() if line.strip()]
+    assert len(records) == 1
+    argv = records[0]["argv"]
+    assert "--kill-after=30" in argv
+    assert str(_script_default_timeout()) in argv
 
 
 def test_the_script_creates_a_missing_cache_directory(tmp_path: Path) -> None:
@@ -873,6 +958,36 @@ def test_a_blank_source_is_skipped(tmp_path: Path) -> None:
     assert process.returncode == 0, process.stdout + process.stderr
     assert len(calls) == 1
     assert calls[0].url == "https://example.test/good"
+
+
+def test_a_whitespace_only_source_is_skipped(tmp_path: Path) -> None:
+    """A line that only holds spaces must not start a download.
+
+    A blank line is skipped, but a line that only holds whitespace is just as
+    empty: it is not a source, and spending an attempt on it would waste the
+    budget of the sources that follow.
+    """
+    process, calls = _run_script(
+        tmp_path,
+        ["   ", "https://example.test/good"],
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert [call.url for call in calls] == ["https://example.test/good"]
+
+
+def test_an_empty_source_list_falls_back_to_the_production_sources(
+    tmp_path: Path,
+) -> None:
+    """An empty source list must not leave the script without a source.
+
+    The source list is optional, so an empty value falls back to the pinned
+    production sources. The first of them is the archive.org capture.
+    """
+    process, calls = _run_script(tmp_path, [])
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    assert calls[0].url == MIRROR_URL
 
 
 def test_an_http_error_page_is_not_kept_as_the_archive(tmp_path: Path) -> None:

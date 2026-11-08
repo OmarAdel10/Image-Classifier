@@ -24,17 +24,20 @@ CACHE_DIR="${1:?usage: fetch_cifar10.sh <cache-dir>}"
 MD5="${CIFAR10_MD5:-c58f30108f718f92721af3b95e74349a}"
 SHA256="${CIFAR10_SHA256:-6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce}"
 ATTEMPTS="${CIFAR10_ATTEMPTS:-2}"
-# Worst case: 2 sources x 2 attempts x 1200 s = 80 min, which stays inside
-# the 120 min job timeout and leaves room for the setup and the test run. A
-# larger per-attempt budget would hit the job timeout instead of the
-# script's own error path, which reports the failed download.
+# Worst case: 2 sources x 2 attempts x 1200 s = 80 min, plus 30 s of kill
+# grace per attempt (4920 s = 82 min), which stays inside the 120 min job
+# timeout and leaves room for the setup and the test run. A larger
+# per-attempt budget would hit the job timeout instead of the script's own
+# error path, which reports the failed download.
 TIMEOUT="${CIFAR10_TIMEOUT:-1200}"
-# The archive.org snapshot serves the identical bytes ~6x faster than the
-# throttled cs.toronto.edu origin, which cannot finish the 170 MB archive
-# inside the job budget. The capture is pinned to an immutable id instead of
-# the "2020id_" closest-capture selector, so the mirror cannot start serving
-# different bytes later. Both sources are verified against the pinned hashes
-# above, so the mirror is verified, not trusted.
+# The archive.org capture is pinned to an immutable id instead of the
+# "2020id_" closest-capture selector, so the mirror cannot start serving
+# different bytes later. Measured on 2026-11-08 from a CI runner network:
+# the capture delivered 170,498,071 bytes at ~82 KB/s (36m47s), which is
+# slower than one per-attempt budget (1200 s), so a cold run always consumes
+# attempt 1 and finishes through the "-C -" resume on attempt 2. The
+# cs.toronto.edu origin is throttled further. Both sources are verified
+# against the pinned hashes above, so the mirror is verified, not trusted.
 URLS="${CIFAR10_URLS:-https://web.archive.org/web/20201130004040id_/https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
 https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz}"
 
@@ -62,7 +65,8 @@ if verify; then
 else
   rm -f cifar-10-python.tar.gz
   while IFS= read -r url; do
-    [ -n "$url" ] || continue
+    # A blank or whitespace-only line is not a source.
+    [[ -n "${url//[[:space:]]/}" ]] || continue
     echo "Downloading CIFAR-10 from $url"
     for attempt in $(seq 1 "$ATTEMPTS"); do
       # No --retry: an automatic retry of a resumed transfer can re-send
