@@ -54,6 +54,25 @@ class _DeletingClient extends http.BaseClient {
   }
 }
 
+/// Returns a response whose body cannot be read.
+///
+/// The connection succeeds and the status code is delivered, but reading the
+/// body fails. That is a transfer problem, not a connection problem.
+class _BrokenBodyClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(
+      Stream<List<int>>.error(
+        FileSystemException(
+          'the response body could not be read',
+          request.url.path,
+        ),
+      ),
+      200,
+    );
+  }
+}
+
 void main() {
   group('ApiClient', () {
     late MockClient mockClient;
@@ -653,6 +672,81 @@ void main() {
           ),
         );
       });
+    });
+
+    group('response read failures', () {
+      test('a response body that cannot be read is not a connection error', () async {
+        final file = _createTempImageFile();
+        final apiClient = ApiClient(client: _BrokenBodyClient());
+
+        await expectLater(
+          apiClient.predict(file),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the response from'),
+                    // The transfer failed, but the connection was established.
+                    isNot(contains('Connection to')),
+                    isNot(contains('Cannot reach')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 502),
+          ),
+        );
+      });
+
+      test(
+        'a response body that cannot be read fails the byte upload too',
+        () async {
+          final apiClient = ApiClient(client: _BrokenBodyClient());
+
+          await expectLater(
+            apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the response from'),
+                      isNot(contains('Connection to')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+    });
+
+    group('health status edge cases', () {
+      test(
+        'a malformed response is reported as an unreachable backend',
+        () async {
+          final malformedClient = MockClient((request) async {
+            throw const FormatException('malformed response');
+          });
+          final apiClient = ApiClient(client: malformedClient);
+
+          expect(await apiClient.healthStatusCode(), isNull);
+        },
+      );
+    });
+
+    test('dispose leaves a caller owned client usable', () async {
+      mockClient = MockClient((request) async {
+        return http.Response('{"status": "ok"}', 200);
+      });
+      apiClient = ApiClient(client: mockClient);
+
+      await apiClient.dispose();
+
+      // The caller owns the client, so disposing the ApiClient must not close
+      // it.
+      expect(await apiClient.healthCheck(), isTrue);
     });
   });
 

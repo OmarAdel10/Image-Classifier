@@ -144,7 +144,18 @@ class ApiClient {
           statusCode: 400,
         );
       }
-      final response = await http.Response.fromStream(streamedResponse);
+      final http.Response response;
+      try {
+        response = await http.Response.fromStream(streamedResponse);
+      } on FileSystemException {
+        // The response body could not be read. The transfer failed, but the
+        // connection itself was established, so this is not a connection
+        // error and the backend must not be blamed for it.
+        throw ApiException(
+          message: 'Could not read the response from $url.',
+          statusCode: 502,
+        );
+      }
 
       if (response.statusCode == 200) {
         return PredictionResponse.fromJson(_parseJsonMap(response.body));
@@ -178,7 +189,18 @@ class ApiClient {
         );
 
       final streamedResponse = await client.send(request).timeout(_timeout);
-      final response = await http.Response.fromStream(streamedResponse);
+      final http.Response response;
+      try {
+        response = await http.Response.fromStream(streamedResponse);
+      } on FileSystemException {
+        // The response body could not be read. The transfer failed, but the
+        // connection itself was established, so this is not a connection
+        // error and the backend must not be blamed for it.
+        throw ApiException(
+          message: 'Could not read the response from $url.',
+          statusCode: 502,
+        );
+      }
 
       if (response.statusCode == 200) {
         return PredictionResponse.fromJson(_parseJsonMap(response.body));
