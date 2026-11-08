@@ -215,14 +215,14 @@ class ApiClient {
     });
   }
 
-  /// Closes the underlying [http.Client] if it was created by this instance.
+  /// Releases the resources held by this client.
   ///
-  /// Call this when the [ApiClient] is no longer needed to free resources.
-  /// Note: If the [client] was provided by the caller, the caller is responsible
-  /// for disposing it. This method only disposes if the client was created
-  /// internally (which this class does not do by default).
+  /// This client never owns the underlying [http.Client]: it is created by the
+  /// caller and passed in through the constructor, so closing it here would
+  /// break other users of the same client. The method therefore does nothing
+  /// and the caller stays responsible for disposing the client.
   Future<void> dispose() async {
-    // No-op by default — caller owns the client lifecycle.
+    // No-op: the client lifecycle belongs to the caller.
   }
 
   /// Runs [request], translating transport failures into [ApiException].
