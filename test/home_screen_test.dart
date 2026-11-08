@@ -228,6 +228,105 @@ void main() {
       expect(snackBar.action, isNull);
     });
 
+    testWidgets('does not leak the raw text of an image failure', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any))
+          .thenThrow(StateError('bad image'));
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: MockClient((request) async => http.Response('{}', 200)),
+          imageService: imageService,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      expect(find.textContaining('Invalid image:'), findsOneWidget);
+      expect(find.textContaining('Bad state:'), findsNothing);
+      expect(find.textContaining('bad image'), findsNothing);
+      expect(find.textContaining('StateError'), findsNothing);
+    });
+
+    testWidgets('shows the reason why an image was rejected', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any)).thenThrow(
+        const ImageValidationException(
+          'only PNG and JPEG images are supported',
+        ),
+      );
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: MockClient((request) async => http.Response('{}', 200)),
+          imageService: imageService,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      expect(
+        find.textContaining('only PNG and JPEG images are supported'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('ImageValidationException'), findsNothing);
+    });
+
+    testWidgets('does not leak the raw text of a model info failure', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any))
+          .thenAnswer((_) async => imageFile);
+
+      final mockClient = MockClient((request) async {
+        if (request.url.path == '/model-info') {
+          throw StateError('backend exploded');
+        }
+        return http.Response('{}', 200);
+      });
+
+      await tester.pumpWidget(
+        _buildHomeScreen(httpClient: mockClient, imageService: imageService),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      expect(find.textContaining('Could not load model info'), findsOneWidget);
+      expect(
+        find.textContaining('An unexpected error occurred.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Bad state:'), findsNothing);
+      expect(find.textContaining('backend exploded'), findsNothing);
+      expect(find.textContaining('StateError'), findsNothing);
+    });
+
     testWidgets(
       'replaces a previous image error snackbar instead of queueing',
       (WidgetTester tester) async {
@@ -241,7 +340,10 @@ void main() {
         when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
         when(imageService.validateAndCompress(any)).thenAnswer((_) async {
           validations++;
-          throw StateError(
+          // A rejection with a reason the user may read: the two messages
+          // have to differ, so the second snackbar can be told apart from the
+          // first one.
+          throw ImageValidationException(
             validations == 1 ? 'first image failure' : 'second image failure',
           );
         });

@@ -56,8 +56,10 @@ class PredictionProvider extends ChangeNotifier {
       _state = PredictionStateResult(response: response);
     } on ApiException catch (e) {
       _state = PredictionStateError(message: e.message);
-    } on Exception catch (e) {
-      _state = PredictionStateError(message: e.toString());
+    } on Exception {
+      // Any other exception is unexpected. The raw text is not shown, so an
+      // internal detail cannot leak into the UI.
+      _state = const PredictionStateError(message: 'The prediction failed.');
     } on TypeError {
       // A response with an unexpected shape fails with a TypeError. The
       // user gets a fixed message: the raw error text is not shown.

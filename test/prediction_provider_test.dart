@@ -83,7 +83,11 @@ void main() {
 
       expect(provider.state, isA<PredictionStateError>());
       final errorState = provider.state as PredictionStateError;
-      expect(errorState.message, contains('network error'));
+      // The failure is reported with a fixed message: the raw text of the
+      // exception is not shown to the user.
+      expect(errorState.message, 'The prediction failed.');
+      expect(errorState.message, isNot(contains('network error')));
+      expect(errorState.message, isNot(contains('Exception')));
     });
 
     test('predict sets state to error on a thrown Error (TypeError)', () async {
@@ -100,7 +104,10 @@ void main() {
       final errorState = provider.state as PredictionStateError;
       // The raw error text is not shown to the user, but the failure is
       // still reported instead of leaving the UI in the loading state.
-      expect(errorState.message, isNotEmpty);
+      expect(
+        errorState.message,
+        'The backend returned an unexpected response.',
+      );
       expect(errorState.message, isNot(contains('TypeError')));
     });
 
@@ -116,8 +123,12 @@ void main() {
 
       expect(provider.state, isA<PredictionStateError>());
       final errorState = provider.state as PredictionStateError;
-      expect(errorState.message, isNotEmpty);
+      expect(
+        errorState.message,
+        'The prediction failed with an unexpected error.',
+      );
       expect(errorState.message, isNot(contains('internal detail')));
+      expect(errorState.message, isNot(contains('StateError')));
     });
 
     test('predict sets state to error on an ArgumentError', () async {
@@ -133,7 +144,10 @@ void main() {
       expect(provider.state, isA<PredictionStateError>());
       final errorState = provider.state as PredictionStateError;
       // The failure is reported, but the raw error text is not shown.
-      expect(errorState.message, isNotEmpty);
+      expect(
+        errorState.message,
+        'The prediction failed with an unexpected error.',
+      );
       expect(errorState.message, isNot(contains('bad shape')));
     });
 

@@ -9,6 +9,20 @@ import 'package:image_picker/image_picker.dart';
 /// Type alias for the image picker function to enable testing.
 typedef PickFile = Future<XFile?> Function();
 
+/// Thrown when a picked file cannot be used as an image.
+///
+/// The [message] is written for the user, so it can be shown as is. Any
+/// other exception keeps its own text, which must never reach the UI.
+class ImageValidationException implements Exception {
+  const ImageValidationException(this.message);
+
+  /// The human readable reason why the file was rejected.
+  final String message;
+
+  @override
+  String toString() => 'ImageValidationException: $message';
+}
+
 /// Service for picking and validating/compressing images.
 class ImageService {
   /// Creates an [ImageService] with an optional [picker] for testing.
@@ -62,13 +76,13 @@ class ImageService {
   /// - Re-encodes as JPEG at 85% quality
   ///
   /// Returns the compressed image file.
-  /// Throws [StateError] if validation fails.
+  /// Throws [ImageValidationException] if validation fails.
   Future<File> validateAndCompress(File file) async {
     // Check file size
     final fileSize = await file.length();
     if (fileSize > Config.maxImageSizeBytes) {
-      throw StateError(
-        'File size ${fileSize}B exceeds maximum ${Config.maxImageSizeBytes}B',
+      throw ImageValidationException(
+        'the file is larger than the ${Config.maxImageSizeBytes} byte limit',
       );
     }
 
@@ -77,16 +91,16 @@ class ImageService {
     final image = img.decodeImage(bytes);
 
     if (image == null) {
-      throw StateError('Invalid image format or corrupted file');
+      throw ImageValidationException(
+        'the file is not a valid PNG or JPEG image',
+      );
     }
 
     // Check format
     final isPng = _isPng(bytes);
     final isJpeg = _isJpeg(bytes);
     if (!isPng && !isJpeg) {
-      throw StateError(
-        'Unsupported image format. Only PNG and JPEG are allowed.',
-      );
+      throw ImageValidationException('only PNG and JPEG images are supported');
     }
 
     // Resize if needed (max dimension 1024)
@@ -97,7 +111,9 @@ class ImageService {
 
     // Check compressed size
     if (jpegBytes.length > Config.maxImageSizeBytes) {
-      throw StateError('Compressed image exceeds maximum size');
+      throw ImageValidationException(
+        'the compressed image is larger than the size limit',
+      );
     }
 
     // Write to temp file
