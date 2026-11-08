@@ -136,6 +136,12 @@ matching Plane work item.
   `Invalid request to ...` with a null-safe message. The remaining part of the
   finding — the `FormatException` arm of the request builder — stays open in
   IC-77.
+- **Still open in IC-77:** the `http.ClientException` and `IOException` arms
+  of the request builder still embed the raw exception text
+  (`lib/services/api_client.dart:244-250`, `lib/services/api_client.dart:256-260`),
+  so a TLS failure shows `HandshakeException: ...` in the user-facing message.
+  The fixed wording would be `Connection to <url> failed. Check that the
+  backend is running and reachable from this device.`
 - **Note:** The port bound at `lib/config.dart:239` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
@@ -335,3 +341,15 @@ matching Plane work item.
   the lock, so the drift is cosmetic.
 - **Fix:** Regenerate the lock with
   `uv pip compile pyproject.toml --extra dev --generate-hashes -o requirements.lock`.
+
+## TRANSPORT-STATUS — transport failures use two different status codes
+
+- **Plane:** IC-91
+- **Location:** `lib/services/api_client.dart:247-260`
+- **Finding:** A transport failure is reported with status `502` when the
+  client raises an `http.ClientException` and with status `503` when it
+  raises another `IOException`, so the same user-visible problem (the backend
+  is not reachable) carries two different codes. The messages differ as well:
+  the `ClientException` arm names the exception message, the `IOException` arm
+  names the whole exception.
+- **Fix:** Map every transport failure to one status code and one message.
