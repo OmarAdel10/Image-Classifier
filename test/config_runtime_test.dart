@@ -803,6 +803,36 @@ void main() {
           Config.platformDefaultApiBaseUrl,
         );
       });
+
+      test('a blank URL clears the override', () async {
+        await Config.setApiBaseUrl('http://saved.example.com:9000');
+
+        // The contract promises that whitespace clears the override too.
+        await Config.setApiBaseUrl('   ');
+
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+      });
+
+      test('a blank URL clears the override even in a pinned build', () async {
+        await Config.setApiBaseUrl('http://saved.example.com:9000');
+
+        await Config.setApiBaseUrl(
+          '   ',
+          compileTimeOverride: 'http://compile.example.com:8000',
+        );
+
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getString(Config.apiBaseUrlPrefsKey), isNull);
+        expect(
+          await Config.resolveApiBaseUrl(),
+          Config.platformDefaultApiBaseUrl,
+        );
+      });
     });
 
     group('clearApiBaseUrl', () {
