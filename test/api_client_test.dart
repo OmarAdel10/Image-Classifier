@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -49,6 +50,9 @@ class _DeletingClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     file.deleteSync();
+    // The file has to be gone before the body is read, so that the read
+    // fails on every platform instead of reading an open handle.
+    expect(file.existsSync(), isFalse);
     await request.finalize().toBytes();
     return http.StreamedResponse(const Stream<List<int>>.empty(), 200);
   }
@@ -70,6 +74,21 @@ class _BrokenBodyClient extends http.BaseClient {
       ),
       200,
     );
+  }
+}
+
+/// Returns a response whose body never ends.
+///
+/// The status code arrives, but the body stream stays open forever. Without a
+/// bound on the body read the request would never finish.
+class _StalledBodyClient extends http.BaseClient {
+  _StalledBodyClient(this.body);
+
+  final StreamController<List<int>> body;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(body.stream, 200, contentLength: 128);
   }
 }
 
@@ -584,22 +603,11 @@ void main() {
 
     group('image file read failures', () {
       test('an unreadable image file is reported as a file problem', () async {
-        final file = _createTempImageFile();
-        Process.runSync('chmod', ['000', file.path]);
-        addTearDown(() {
-          Process.runSync('chmod', ['600', file.path]);
-        });
-
-        var stillReadable = true;
-        try {
-          file.openSync().closeSync();
-        } on FileSystemException {
-          stillReadable = false;
-        }
-        if (stillReadable) {
-          markTestSkipped('the current user can read a mode 000 file');
-          return;
-        }
+        // The parent of the path is a regular file, so the path cannot be
+        // opened on any platform. A permission bit would not work on a root
+        // runner, and the path would then be readable after all.
+        final blocker = _createTempImageFile();
+        final file = File('${blocker.path}/image.png');
 
         final mockClient = MockClient((request) async {
           return http.Response('{}', 200);
@@ -716,6 +724,62 @@ void main() {
                     ),
                   )
                   .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+    });
+
+    group('a response that never ends', () {
+      test('a stalled response body is reported as a timeout', () async {
+        final body = StreamController<List<int>>();
+        addTearDown(body.close);
+        final file = _createTempImageFile();
+        final apiClient = ApiClient(
+          client: _StalledBodyClient(body),
+          timeout: const Duration(milliseconds: 50),
+        );
+
+        await expectLater(
+          apiClient.predict(file),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 408)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('timed out'),
+                    isNot(contains('Connection to')),
+                  ),
+                ),
+          ),
+        );
+      });
+
+      test(
+        'a stalled response body is reported as a timeout for bytes too',
+        () async {
+          final body = StreamController<List<int>>();
+          addTearDown(body.close);
+          final apiClient = ApiClient(
+            client: _StalledBodyClient(body),
+            timeout: const Duration(milliseconds: 50),
+          );
+
+          await expectLater(
+            apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.statusCode, 'statusCode', 408)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('timed out'),
+                      isNot(contains('Connection to')),
+                    ),
+                  ),
             ),
           );
         },

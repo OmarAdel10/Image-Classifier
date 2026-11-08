@@ -146,7 +146,10 @@ class ApiClient {
       }
       final http.Response response;
       try {
-        response = await http.Response.fromStream(streamedResponse);
+        // The body read is bounded too: a backend that sends the status code
+        // and then stalls would otherwise keep the request pending forever.
+        response = await http.Response.fromStream(streamedResponse)
+            .timeout(_timeout);
       } on FileSystemException {
         // The response body could not be read. The transfer failed, but the
         // connection itself was established, so this is not a connection
@@ -191,7 +194,10 @@ class ApiClient {
       final streamedResponse = await client.send(request).timeout(_timeout);
       final http.Response response;
       try {
-        response = await http.Response.fromStream(streamedResponse);
+        // The body read is bounded too: a backend that sends the status code
+        // and then stalls would otherwise keep the request pending forever.
+        response = await http.Response.fromStream(streamedResponse)
+            .timeout(_timeout);
       } on FileSystemException {
         // The response body could not be read. The transfer failed, but the
         // connection itself was established, so this is not a connection
