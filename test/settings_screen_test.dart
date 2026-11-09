@@ -853,6 +853,30 @@ void main() {
       expect(banner.data, isNot(contains(longUrl)));
     });
 
+    testWidgets('a control character is removed from the banner', (
+      WidgetTester tester,
+    ) async {
+      final mockClient = MockClient((request) async {
+        throw Exception('boom');
+      });
+      // A control character passes the address validation, so the banner is
+      // the only place where it can be removed.
+      final urlWithControlCharacter = 'http://exa\x01mple.com:8000';
+
+      await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), urlWithControlCharacter);
+      await tester.tap(_buttonWithLabel('Test Connection'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // The banner carries the address without the control character.
+      final banner = tester.widget<Text>(find.textContaining('Could not test'));
+      expect(banner.data, isNot(contains('\x01')));
+      expect(banner.data, contains('http://example.com:8000'));
+    });
+
     group('unmounted while a request is in flight', () {
       testWidgets(
         'a probe that finishes after the screen is closed is ignored',
