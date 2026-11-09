@@ -496,3 +496,40 @@ matching Plane work item.
   other failure reads `an unexpected error occurred`), and `_displayUrl`
   removes control characters and shortens the address to 119 characters plus
   an ellipsis.
+
+## SEND-ABORT — a request that stalls while it is sent keeps its socket open
+
+- **Plane:** IC-105
+- **Location:** `lib/services/api_client.dart` (`client.send(request).timeout(_timeout)`
+  in `predict` and `predictBytes`, `client.send(...)` in `getModelInfo`)
+- **Finding:** `Future.timeout` does not cancel the work it gives up on, and
+  `package:http` 1.2.2 has no `Abortable` client (that contract only exists
+  from http 1.6.0 on), so a request that stalls while it is being sent keeps
+  its socket open until the server or the client gives up. The response body
+  is now read through an explicit subscription that is cancelled when the
+  deadline expires, but the send itself cannot be aborted.
+- **Fix:** Upgrade `package:http` to a version that exposes `Abortable`, or
+  close the client when the deadline of a send expires.
+
+## PREEXISTING-COVERAGE — untouched UI units have untested branches
+
+- **Plane:** IC-104
+- **Location:** `lib/screens/home_screen.dart` (`_onClassify`, `_clearPrediction`,
+  `_onViewDetails`, the second navigation, the two result buttons, the model
+  info success path, the model info spinner, the confidence bands),
+  `lib/services/image_service.dart` (`_defaultPicker`)
+- **Finding:** A coverage review of this branch reported these units as
+  branches without a test. They are pre-existing code that this branch does
+  not change, so they are outside the scope of the branch.
+- **Fix:** Add the missing tests for the untouched units.
+
+## HARNESS-BRANCHES — the download script test harness has untested branches
+
+- **Plane:** IC-106
+- **Location:** `backend/tests/test_ci_cifar_script.py` (the harness that
+  creates the cache directory, the skip of a blank line in the stub log, the
+  assertion that looks a workflow step up by name)
+- **Finding:** Three branches of the test harness itself are never taken. They
+  are branches of the tests, not of the shipped script, and the script contract
+  itself is covered.
+- **Fix:** Cover the branches or remove the dead ones.
