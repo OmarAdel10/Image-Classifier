@@ -116,9 +116,9 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:269`,
-  `lib/services/api_client.dart:274`,
-  `lib/services/api_client.dart:281`
+- **Location:** `lib/services/api_client.dart:252`,
+  `lib/services/api_client.dart:264`,
+  `lib/services/api_client.dart:269`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -132,10 +132,9 @@ matching Plane work item.
   the request body is streamed (`lib/services/api_client.dart:138`), a response
   body that cannot be read is reported as `Could not read the response from
   ...` (status 502) instead of `Connection to ... failed`
-  (`lib/services/api_client.dart:151`), a response body that never ends is
-  reported as a timeout (status 408) instead of hanging the request
-  (`lib/services/api_client.dart:151`, `lib/services/api_client.dart:200`),
-  and an `ArgumentError` is reported as
+  (`lib/services/api_client.dart:153`, `lib/services/api_client.dart:202`),
+  a response body that never ends is reported as a timeout (status 408)
+  instead of hanging the request, and an `ArgumentError` is reported as
   `Invalid request to ...` with a null-safe message. The remaining part of the
   finding — the `FormatException` arm of the request builder — stays open in
   IC-77.
@@ -145,6 +144,11 @@ matching Plane work item.
   so a TLS failure shows `HandshakeException: ...` in the user-facing message.
   The fixed wording would be `Connection to <url> failed. Check that the
   backend is running and reachable from this device.`
+- **Still open in IC-77:** the `on IOException` arm of the request builder is
+  effectively dead: a `SocketException` is matched by the earlier arm and
+  `http.ClientException` is not an `IOException`, so the arm can only be
+  reached by a custom client. The arm should either be removed or be given the
+  same fixed wording as the other transport arms.
 - **Note:** The port bound at `lib/config.dart:239` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
@@ -384,3 +388,36 @@ matching Plane work item.
   `backend/tests/test_ci_cifar_script.py`, but no shell linter runs over it, so
   a shellcheck finding only shows up during review.
 - **Fix:** Add a shellcheck step to the backend CI workflow.
+
+## GITLEAKS-PIN — the secrets scan action is not pinned to a commit SHA
+
+- **Plane:** IC-95
+- **Location:** `.github/workflows/flutter-ci.yml:34`
+- **Finding:** The Secrets Scan job uses `gitleaks/gitleaks-action@master`, so
+  the action can change without a review. Every other action that this branch
+  touches is pinned to a commit SHA.
+- **Fix:** Pin the action to a commit SHA and add a workflow contract test that
+  holds it there.
+
+## TEMP-DIR-CLEANUP — the temporary image directory is never deleted
+
+- **Plane:** IC-96
+- **Location:** `lib/services/image_service.dart:128`
+- **Finding:** `Directory.systemTemp.createTempSync('image_classifier_')` creates
+  a directory for every compressed image and nothing deletes it, so the
+  directories and the JPEG inside them accumulate in the system temp folder.
+- **Fix:** Delete the directory once the caller has read the file, or document
+  who owns it and when it is removed.
+
+## LINT-SCOPE — the CI lint scope differs from the local gate
+
+- **Plane:** IC-97
+- **Location:** `.github/workflows/backend-ci.yml:42`,
+  `.github/workflows/image-classifier-ci.yml:80`
+- **Finding:** The workflows lint `src/ tests/ scripts/ conftest.py` while the
+  local gate runs the tools over the whole backend directory. The CI scope
+  already reaches every Python file, so nothing is missed today; the only
+  difference is that the local gate additionally inspects
+  `backend/pyproject.toml` for unused `noqa` directives.
+- **Fix:** Use the same scope in the workflow and in the local gate, so a new
+  top level module cannot slip through unnoticed.
