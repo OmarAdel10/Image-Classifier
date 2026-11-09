@@ -533,3 +533,62 @@ matching Plane work item.
   are branches of the tests, not of the shipped script, and the script contract
   itself is covered.
 - **Fix:** Cover the branches or remove the dead ones.
+
+## RANGE-LESS-SOURCE — a download source without ranged requests cannot be resumed
+
+- **Plane:** IC-107
+- **Location:** `backend/scripts/fetch_cifar10.sh` (the curl call with `-C -`
+  and the purge of the partial file on the last attempt)
+- **Finding:** `curl -C -` asks for the missing bytes with a range request. A
+  source that ignores the range answers with the whole file, so curl aborts
+  and every attempt of that source fails until the partial file is purged.
+  The partial is purged only when the attempts of a source are used up, so a
+  source that refuses a range request burns the whole budget. Both pinned
+  sources answer a range request with `206`, so the risk is latent.
+- **Fix:** Purge the partial file before the first attempt of a source, or
+  retry without `-C -` when curl reports a range error.
+
+## CLEAR-CAUSE — a failed removal of the stored URL names no cause
+
+- **Plane:** IC-108
+- **Location:** `lib/config.dart` (`clearApiBaseUrl`), the reset banner of
+  `lib/screens/settings_screen.dart`
+- **Finding:** `clearApiBaseUrl` answers every failure with a single
+  `false`, so a refused removal and an unavailable plugin are told apart by
+  nothing. The banner therefore names no cause, although the same screen
+  names the cause of every other failure.
+- **Fix:** Return the cause next to the result and render it in the banner.
+
+## BYTE-UPLOAD-MESSAGE — the byte upload names a file that does not exist
+
+- **Plane:** IC-109
+- **Location:** `lib/services/api_client.dart` (the file fault of the byte
+  upload path)
+- **Finding:** The byte upload path reports `Could not read the image file.`
+  although it builds its body from memory and reads no file. The arm is
+  reachable only through a custom client.
+- **Fix:** Use a message that fits the byte path.
+
+## IMAGE-LIMIT-UNIT — the image size limit is rendered as a raw byte count
+
+- **Plane:** IC-110
+- **Location:** `lib/services/image_service.dart` (the size limit in the
+  rejection message)
+- **Finding:** The rejection message names the limit as `10485760 byte
+  limit`, which the user has to convert by hand.
+- **Fix:** Render the limit in MiB.
+
+## REGISTER-POLISH — the register and the contract harness need polish
+
+- **Plane:** IC-111
+- **Location:** `docs/followups.md` (the register mixes open, delivered and
+  rejected items without a status field), `lib/services/image_service.dart`
+  (the `maxBytes` parameter is a public test seam of a shipped service),
+  `backend/tests/test_ci_cifar_script.py` (every test stubs curl, so the real
+  tool semantics of `--speed-limit`, `--speed-time`, `--proto` and `-C -` are
+  only asserted through the arguments)
+- **Finding:** Three small findings of the round 25 review. The register is
+  accurate but hard to triage, the test seam widens the public surface of the
+  image service, and the contract suite never runs the real tool.
+- **Fix:** Add a status field to the register, narrow the test seam and
+  exercise the real binary in the contract suite.
