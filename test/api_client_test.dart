@@ -92,6 +92,23 @@ class _StalledBodyClient extends http.BaseClient {
   }
 }
 
+/// Returns a response whose body never ends, after a slow send.
+///
+/// The headers arrive late, so only the rest of the request budget is left
+/// for the body read.
+class _SlowStalledBodyClient extends http.BaseClient {
+  _SlowStalledBodyClient(this.body, this.sendDelay);
+
+  final StreamController<List<int>> body;
+  final Duration sendDelay;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    await Future<void>.delayed(sendDelay);
+    return http.StreamedResponse(body.stream, 200, contentLength: 128);
+  }
+}
+
 /// A client whose send fails with a file system fault.
 ///
 /// A custom client can read the request body from the file system, so the
@@ -907,9 +924,125 @@ void main() {
           ),
         );
       });
+
+      test('a truncated model info body is not a connection error', () async {
+        final apiClient = ApiClient(
+          client: _BrokenBodyClient(
+            http.ClientException('Connection closed while receiving data.'),
+          ),
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the response from'),
+                    isNot(contains('Cannot reach')),
+                    isNot(contains('Connection closed while receiving data')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 502),
+          ),
+        );
+      });
+
+      test('a socket error while the model info body is read is not a '
+          'connection error', () async {
+        final apiClient = ApiClient(
+          client: _BrokenBodyClient(
+            SocketException('Connection reset by peer'),
+          ),
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the response from'),
+                    isNot(contains('Cannot reach')),
+                    isNot(contains('Connection reset by peer')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 502),
+          ),
+        );
+      });
+
+      test(
+        'a model info body that cannot be read is not a connection error',
+        () async {
+          final apiClient = ApiClient(
+            client: _BrokenBodyClient(
+              FileSystemException(
+                'the response body could not be read',
+                '/tmp/image_classifier_response',
+              ),
+            ),
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the response from'),
+                      isNot(contains('Cannot reach')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
     });
 
     group('a response that never ends', () {
+      test('a body that stalls after a slow send is reported as a timeout '
+          'within the request budget', () async {
+        final body = StreamController<List<int>>();
+        addTearDown(body.close);
+        final apiClient = ApiClient(
+          client: _SlowStalledBodyClient(
+            body,
+            const Duration(milliseconds: 800),
+          ),
+          timeout: const Duration(milliseconds: 1000),
+        );
+
+        final stopwatch = Stopwatch()..start();
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 408)
+                .having((e) => e.message, 'message', contains('timed out')),
+          ),
+        );
+        stopwatch.stop();
+
+        expect(
+          stopwatch.elapsed,
+          lessThan(const Duration(milliseconds: 1400)),
+          reason: 'the send and the body read share one request budget',
+        );
+        expect(
+          body.hasListener,
+          isFalse,
+          reason:
+              'the body subscription must be released when the read times out',
+        );
+      });
       test('a stalled response body is reported as a timeout', () async {
         final body = StreamController<List<int>>();
         addTearDown(body.close);

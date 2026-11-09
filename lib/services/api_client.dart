@@ -103,12 +103,16 @@ class ApiClient {
       // The body is read through the bounded reader, so a model info response
       // that is cut short or never ends is reported the same way a prediction
       // response is: the backend answered, so the transfer failed after that.
+      final stopwatch = Stopwatch()..start();
       final streamedResponse = await client
           .send(http.Request('GET', Uri.parse('$url/model-info')))
           .timeout(_timeout);
       final http.Response response;
       try {
-        response = await _readResponseBody(streamedResponse);
+        response = await _readResponseBody(
+          streamedResponse,
+          _remainingBudget(stopwatch),
+        );
       } on http.ClientException {
         throw _responseReadFailure(url);
       } on SocketException {
@@ -147,6 +151,7 @@ class ApiClient {
       final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
         ..files.add(upload);
 
+      final stopwatch = Stopwatch()..start();
       final http.StreamedResponse streamedResponse;
       try {
         streamedResponse = await client.send(request).timeout(_timeout);
@@ -163,7 +168,10 @@ class ApiClient {
       try {
         // The body read is bounded too: a backend that sends the status code
         // and then stalls would otherwise keep the request pending forever.
-        response = await _readResponseBody(streamedResponse);
+        response = await _readResponseBody(
+          streamedResponse,
+          _remainingBudget(stopwatch),
+        );
       } on http.ClientException {
         // The body was cut short after the status line arrived. The backend
         // answered, so this is not a connection problem.
@@ -206,6 +214,7 @@ class ApiClient {
           http.MultipartFile.fromBytes('file', bytes, filename: fileName),
         );
 
+      final stopwatch = Stopwatch()..start();
       final http.StreamedResponse streamedResponse;
       try {
         streamedResponse = await client.send(request).timeout(_timeout);
@@ -222,7 +231,10 @@ class ApiClient {
       try {
         // The body read is bounded too: a backend that sends the status code
         // and then stalls would otherwise keep the request pending forever.
-        response = await _readResponseBody(streamedResponse);
+        response = await _readResponseBody(
+          streamedResponse,
+          _remainingBudget(stopwatch),
+        );
       } on http.ClientException {
         // The body was cut short after the status line arrived. The backend
         // answered, so this is not a connection problem.
@@ -300,7 +312,16 @@ class ApiClient {
     }
   }
 
-  /// Reads the body of [streamedResponse] within the request budget.
+  /// The time that is left of the request budget.
+  ///
+  /// The send and the body read share one budget, so a request never takes
+  /// longer than the configured timeout.
+  Duration _remainingBudget(Stopwatch stopwatch) {
+    final remaining = _timeout - stopwatch.elapsed;
+    return remaining.isNegative ? Duration.zero : remaining;
+  }
+
+  /// Reads the body of [streamedResponse] within [budget].
   ///
   /// The read is bounded and the subscription is released when the deadline
   /// expires. A future timeout alone is not enough: it gives up on the
@@ -309,13 +330,20 @@ class ApiClient {
   /// abandoned.
   Future<http.Response> _readResponseBody(
     http.StreamedResponse streamedResponse,
+    Duration budget,
   ) async {
+    if (budget <= Duration.zero) {
+      throw TimeoutException(
+        'The response body was not read in time.',
+        _timeout,
+      );
+    }
     final completer = Completer<http.Response>();
     final buffer = BytesBuilder(copy: false);
-    final timer = Timer(_timeout, () {
+    final timer = Timer(budget, () {
       if (!completer.isCompleted) {
         completer.completeError(
-          TimeoutException('The response body was not read in time.', _timeout),
+          TimeoutException('The response body was not read in time.', budget),
         );
       }
     });
