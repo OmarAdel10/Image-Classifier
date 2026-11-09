@@ -26,7 +26,7 @@ matching Plane work item.
 ## SETTINGS-DEAD-BRANCH — unreachable ApiException arm in _testConnection banner
 
 - **Plane:** IC-72
-- **Location:** `lib/screens/settings_screen.dart:114` (`_testConnection` catch)
+- **Location:** `lib/screens/settings_screen.dart:156` (`_testConnection` catch)
 - **Finding:** `e is ApiException ? e.message : e` — the `ApiException` arm was
   dead: `healthStatusCode()` reports an unreachable backend as a null status
   code and never throws `ApiException` here.
@@ -37,23 +37,23 @@ matching Plane work item.
 ## ERROR-BODY — _parseErrorMessage reports the raw body, not the status code
 
 - **Plane:** IC-68
-- **Location:** `lib/services/api_client.dart:340`
+- **Location:** `lib/services/api_client.dart:461` (`_parseErrorMessage`)
 - **Finding:** The backend error body is shown verbatim to the user instead of the
   HTTP status code, so a proxy or HTML error page leaks through the message.
 - **Fix:** Report the response status code and keep the body only for structured
   JSON error payloads.
 - **Delivered by PR #30:** `_parseErrorMessage` now takes the status code and
   falls back to `Request failed with status <code>`
-  (`lib/services/api_client.dart:340`); only a JSON payload with a `detail`
+  (`lib/services/api_client.dart:461`); only a JSON payload with a `detail`
   field is used as the message, so an HTML error page is no longer echoed to the
   user. The status code of the response is the status of the `ApiException`
-  (`lib/services/api_client.dart:311`).
+  (`lib/services/api_client.dart:430`).
 
 ## CI-DEDUP — duplicated Flutter CI workflows with divergent torch cache keys
 
 - **Plane:** IC-69
-- **Location:** `.github/workflows/backend-ci.yml:86`,
-  `.github/workflows/image-classifier-ci.yml:124`
+- **Location:** `.github/workflows/backend-ci.yml:93`,
+  `.github/workflows/image-classifier-ci.yml:131`
 - **Finding:** `backend-ci.yml` keys the torch weight cache on
   `torch-pretrained-tv-0.29.1-sha256-<cifar sha256>` while
   `image-classifier-ci.yml` uses the bare key `torch-pretrained-tv-0.29.1`, so
@@ -70,7 +70,7 @@ matching Plane work item.
 ## TORCH-CACHE-VERIFY — torch cache integrity step verifies nothing
 
 - **Plane:** IC-79
-- **Location:** `.github/workflows/backend-ci.yml:89-96`
+- **Location:** `.github/workflows/backend-ci.yml:96-103`
 - **Finding:** The `Verify torch cache integrity` step only echoes two strings;
   it never hashes or compares the cached weights. Its comments claim the
   weights are loaded with `torch.hub.load_state_dict_from_url(check_hash=True)`
@@ -85,7 +85,7 @@ matching Plane work item.
 ## FLAKY-HOME — flaky home_screen snackbar test
 
 - **Plane:** IC-71
-- **Location:** `test/home_screen_test.dart:268`
+- **Location:** `test/home_screen_test.dart:404`
 - **Finding:** The `prediction errors offer a Settings action that navigates`
   test was observed to fail intermittently: the Settings-action SnackBar is
   queued from an async error path, so the widget lookup can run before the
@@ -96,7 +96,7 @@ matching Plane work item.
 ## CI-CIFAR-POISON — Backend CI CIFAR-10 cache poisoning
 
 - **Plane:** IC-74
-- **Location:** `.github/workflows/backend-ci.yml:48-80`
+- **Location:** `.github/workflows/backend-ci.yml:50,84`
 - **Finding:** The failed job re-saved a truncated archive under the same
   immutable cache key, so every later run kept failing on its own poisoned
   cache entry.
@@ -107,8 +107,8 @@ matching Plane work item.
 ## CI-CACHE-KEY — one shared CIFAR cache key, immutable v2 key, unpinned capture
 
 - **Plane:** IC-76
-- **Location:** `.github/workflows/backend-ci.yml:76-80`,
-  `.github/workflows/image-classifier-ci.yml:114-118`
+- **Location:** `.github/workflows/backend-ci.yml:84`,
+  `.github/workflows/image-classifier-ci.yml:122`
 - **Finding:** (1) Both workflows save the same key on the same ref, so the
   second one hits a reservation race and re-downloads 162 MB; (2) the `v2` key
   is immutable, so a future corruption can never be repaired in place; (3) the
@@ -122,9 +122,9 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:247`,
-  `lib/services/api_client.dart:255`,
-  `lib/services/api_client.dart:340`
+- **Location:** `lib/services/api_client.dart:295`,
+  `lib/services/api_client.dart:302`,
+  `lib/services/api_client.dart:309`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -135,27 +135,36 @@ matching Plane work item.
 - **Delivered in PR #30:** a missing image file is now reported as
   `Could not read the image file.` (status 400) before the request is
   sent, a file that exists but cannot be read is reported the same way when
-  the request body is streamed (`lib/services/api_client.dart:145`), a response
+  the request body is streamed (`lib/services/api_client.dart:173`,
+  `lib/services/api_client.dart:229`), a response
   body that cannot be read is reported as `Could not read the response from
   ...` (status 502) instead of `Connection to ... failed`
-  (`lib/services/api_client.dart:153`, `lib/services/api_client.dart:202`),
-  a response body that never ends is reported as a response problem (status
+  (`lib/services/api_client.dart:131`, `lib/services/api_client.dart:188`,
+  `lib/services/api_client.dart:244`), a response body that never ends is
+  reported as a response problem (status
   502, `Could not read the response from ...`) instead of hanging the request
   or blaming the backend, and an `ArgumentError` is reported as
   `Invalid request to ...` with a null-safe message that carries no raw
   argument text.
 - **Delivered in PR #30:** every transport failure now carries one status code
-  (503) and one fixed message (`lib/services/api_client.dart:247-254`,
-  `lib/services/api_client.dart:300`), so a TLS failure no longer shows
+  (503) and one fixed message (`lib/services/api_client.dart:288-294`,
+  `lib/services/api_client.dart:421`), so a TLS failure no longer shows
   `HandshakeException: ...` and the backend is not blamed for a file problem.
   The file messages carry no local path, and the `FormatException` arm
-  (`lib/services/api_client.dart:255`) uses fixed wording without the raw
+  (`lib/services/api_client.dart:295`) uses fixed wording without the raw
   exception text.
+- **Delivered in PR #30 (round 28):** the taxonomy is closed. Every failure of
+  the response body, whatever its type, is reported as the same 502 response
+  problem (`lib/services/api_client.dart:407`), every other exception of the
+  request path is reported as the same 503 transport failure
+  (`lib/services/api_client.dart:314-321`), and the health probe treats every
+  failure as an unreachable backend (`lib/services/api_client.dart:106-116`),
+  so no raw exception text can reach the user.
 - **Still open in IC-77:** the `FormatException` arm covers a
   request-construction failure and a response-parse failure at the same time,
   so the wording is still wrong for the first case. The two failures need two
   messages.
-- **Note:** The port bound at `lib/config.dart:239` (`uri.port > 65535`) is
+- **Note:** The port bound at `lib/config.dart:256` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
   rejects it.
@@ -187,10 +196,10 @@ matching Plane work item.
 ## STORAGE-REFUSAL — shared_preferences caches a refused write
 
 - **Plane:** IC-81
-- **Location:** `lib/config.dart:102` (`setApiBaseUrl`),
-  `lib/config.dart:175` (`_rollbackStoredUrl`),
-  `lib/config.dart:210` (`clearApiBaseUrl`),
-  `lib/screens/settings_screen.dart:188` (`_resetToDefault`)
+- **Location:** `lib/config.dart:112` (`setApiBaseUrl`),
+  `lib/config.dart:185` (`_rollbackStoredUrl`),
+  `lib/config.dart:220` (`clearApiBaseUrl`),
+  `lib/screens/settings_screen.dart:200` (`_resetToDefault`)
 - **Finding:** `shared_preferences` 2.5.6 updates its in-memory cache *before* the
   platform call: `_setValue` writes `_preferenceCache[key]` and `remove` deletes
   `_preferenceCache[key]` before the platform answers. A refused write therefore
@@ -238,7 +247,7 @@ matching Plane work item.
 ## PREDICTION-ERROR-CATCH — the provider catches every Error subtype
 
 - **Plane:** IC-82
-- **Location:** `lib/providers/prediction_provider.dart:59`
+- **Location:** `lib/providers/prediction_provider.dart:69`
 - **Finding:** The `on Error` arm of the prediction request catches every
   `Error` subtype — `AssertionError`, `OutOfMemoryError` and a failing
   `TypeError` alike — and surfaces `e.toString()` to the user.
@@ -268,7 +277,7 @@ matching Plane work item.
 ## CONFIG-PREV-READ — the previous-URL read is outside the guarded try
 
 - **Plane:** IC-84
-- **Location:** `lib/config.dart:137`
+- **Location:** `lib/config.dart:151`
 - **Finding:** `Config.setApiBaseUrl` reads the previously stored URL with
   `prefs.getString(apiBaseUrlPrefsKey)` outside the guarded try. A non-string
   value under that key would raise a raw `TypeError` instead of the documented
@@ -314,8 +323,8 @@ matching Plane work item.
 ## SNACKBAR-QUEUE — hiding a snackbar does not clear the queued ones
 
 - **Plane:** IC-87
-- **Location:** `lib/screens/home_screen.dart:251`,
-  `lib/screens/home_screen.dart:268`
+- **Location:** `lib/screens/home_screen.dart:253`,
+  `lib/screens/home_screen.dart:270`
 - **Finding:** `ScaffoldMessengerState.hideCurrentSnackBar()` reverse-animates
   the visible bar but does not remove it from the queue, so a burst of errors
   can leave more than one bar queued and the new message waits for the exit
@@ -339,7 +348,8 @@ matching Plane work item.
 - **Plane:** IC-89
 - **Location:** `backend/scripts/fetch_cifar10.sh:1`
 - **Finding:** The file starts with `#!/usr/bin/env bash` but is committed with
-  mode `100644` on purpose — a test pins that it must not be executable — so
+  mode `100644` on purpose — the script is invoked through `bash` in both
+  workflows, so it is committed non-executable — so
   the shebang suggests an invocation the contract forbids.
 - **Fix:** Drop the shebang, or state in the usage header that the script is
   run with `bash`.
@@ -358,7 +368,7 @@ matching Plane work item.
 ## TRANSPORT-STATUS — transport failures use two different status codes
 
 - **Plane:** IC-91
-- **Location:** `lib/services/api_client.dart:247-254`
+- **Location:** `lib/services/api_client.dart:288-294`
 - **Finding:** A transport failure is reported with status `502` when the
   client raises an `http.ClientException` and with status `503` when it
   raises another `IOException`, so the same user-visible problem (the backend
@@ -368,7 +378,7 @@ matching Plane work item.
 - **Fix:** Map every transport failure to one status code and one message.
 - **Delivered by PR #30:** a `SocketException`, an `http.ClientException`, an
   `HttpException` and an `IOException` all raise the same `ApiException`
-  (status 503, `lib/services/api_client.dart:300`), so one unreachable backend
+  (status 503, `lib/services/api_client.dart:421`), so one unreachable backend
   now carries one code and one message.
 
 ## IMAGE-SIZE — the rejection message does not name the size of the file
@@ -383,7 +393,7 @@ matching Plane work item.
 ## SETTINGS-EMPTY-FIELD — a cleared URL field is refilled with the stored URL
 
 - **Plane:** IC-93
-- **Location:** `lib/screens/settings_screen.dart:49-56`
+- **Location:** `lib/screens/settings_screen.dart:66-76`
 - **Finding:** The stored URL is loaded asynchronously. If the user types a URL
   and clears the field before the load finishes, the late load writes the
   stored URL back into the field.
@@ -435,12 +445,16 @@ matching Plane work item.
 ## PERCENT-URL — every percent sign in the URL is rejected
 
 - **Plane:** IC-98
-- **Location:** `lib/config.dart:233`
+- **Location:** `lib/config.dart:247`
 - **Finding:** The URL validator rejects the whole address when it contains a
   `%` anywhere, so a legitimate percent-encoded path is refused even though
   the rule was meant to stop an encoded host or an encoded path segment.
 - **Fix:** Reject a percent escape only where it can change the host or the
   path of the request, and accept the rest.
+- **Delivered by PR #30 (round 28):** the validator now also rejects a control
+  character anywhere in the address (`lib/config.dart:242`) and a path walk
+  segment (`lib/config.dart:250`), because `Uri` accepts both and the request
+  would then carry a host or a path the user never typed.
 
 ## PARTIAL-PURGE — a partial download survives a killed script run
 
@@ -456,7 +470,7 @@ matching Plane work item.
 ## PROBE-URL — a malformed address is reported as an unreachable backend
 
 - **Plane:** IC-100
-- **Location:** `lib/services/api_client.dart:82-94` (`healthStatusCode`)
+- **Location:** `lib/services/api_client.dart:87-116` (`healthStatusCode`)
 - **Finding:** The connection probe returns no status code for a malformed base
   URL and for an unreachable backend, so the settings screen reports the same
   cause for both. The user cannot tell a typo from a backend that is down.
@@ -466,7 +480,7 @@ matching Plane work item.
 ## DISPOSE-NOOP — dispose() does nothing
 
 - **Plane:** IC-101
-- **Location:** `lib/services/api_client.dart:228`
+- **Location:** `lib/services/api_client.dart:263`
 - **Finding:** `dispose()` is a no-op because the client never owns the
   `http.Client`. The method is part of the public contract and suggests a
   cleanup that never happens.
@@ -475,7 +489,7 @@ matching Plane work item.
 ## TRAILING-SLASH — the normalized address drops every trailing slash
 
 - **Plane:** IC-102
-- **Location:** `lib/config.dart:51` (`normalizeApiBaseUrl`)
+- **Location:** `lib/config.dart:61` (`normalizeApiBaseUrl`)
 - **Finding:** The normalization removes all trailing slashes, so an address
   that names a path (`http://host:8000/api/`) loses it and the request goes to
   a different route.
@@ -485,8 +499,8 @@ matching Plane work item.
 ## SETTINGS-ERROR-TEXT — the settings banner echoed the raw error and the whole address
 
 - **Plane:** IC-103
-- **Location:** `lib/screens/settings_screen.dart:78` (`_describeError`),
-  `lib/screens/settings_screen.dart:89` (`_displayUrl`)
+- **Location:** `lib/screens/settings_screen.dart:108` (`_describeError`),
+  `lib/screens/settings_screen.dart:20` (`_displayUrl`)
 - **Finding:** The banner described an unknown failure with
   `error.toString()`, so a raw Dart error object reached the user, and it
   echoed the typed address without a limit, so a long or control-character
@@ -494,10 +508,16 @@ matching Plane work item.
 - **Fix:** Describe the failure from an allow-list of known causes and shorten
   the address that the banner shows.
 - **Delivered by PR #30:** `_describeError` now answers from an allow-list (a
-  `StateError` shows its message, a missing provider names the provider, every
-  other failure reads `an unexpected error occurred`), and `_displayUrl`
+  vetted config error shows its hand-written message, a missing provider names
+  the provider, every other failure reads `an unexpected error occurred`), and
+  `_displayUrl`
   removes control characters and shortens the address to 119 characters plus
   an ellipsis.
+- **Delivered by PR #30 (round 28):** only the vetted config error
+  (`lib/config.dart:11`) may show its message, so an arbitrary `StateError` can
+  no longer put its own text on the screen, and the banner removes the
+  credentials from the authority of the address, so a password that carries an
+  at sign, a scheme in capitals and a padded address are all safe.
 
 ## SEND-ABORT — a request that stalls while it is sent keeps its socket open
 
@@ -598,7 +618,7 @@ matching Plane work item.
 ## REDIRECT-HOST-ALLOWLIST — the download follows any HTTPS redirect host
 
 - **Plane:** IC-112
-- **Location:** `backend/scripts/fetch_cifar10.sh:124`
+- **Location:** `backend/scripts/fetch_cifar10.sh:123`
 - **Finding:** The round 26 review (Info severity) found that the download
   runs `curl -fL` and pins only the scheme (`--proto-redir '=https'`), so a
   redirect may send the transfer to any HTTPS host. The pinned md5 and sha256
