@@ -103,11 +103,11 @@ else
   while IFS= read -r url; do
     # A blank or whitespace-only line is not a source.
     [[ -n "${url//[[:space:]]/}" ]] || continue
-    # The source is written to the CI log verbatim. The source list is read
-    # line by line, so a source can never contain a line break, and the fixed
-    # prefix keeps the logged line from starting with the workflow command
-    # syntax.
-    echo "Downloading CIFAR-10 from $url"
+    # The source is written to the CI log as it is, except for the control
+    # characters that are stripped from it: the source list is read line by
+    # line, so a source can never contain a line break, and the fixed prefix
+    # keeps the logged line from starting with the workflow command syntax.
+    echo "Downloading CIFAR-10 from $(log_safe "$url")"
     for attempt in $(seq 1 "$ATTEMPTS"); do
       # No --retry: an automatic retry of a resumed transfer can re-send
       # bytes and splice the file. The attempt loop above retries with a
@@ -115,10 +115,15 @@ else
       # TERM signal, so an attempt cannot outlive its budget. --proto and
       # --proto-redir keep the transfer on HTTPS, so a redirect cannot move
       # it into another scheme the curl build accepts by default.
+      # --max-filesize caps the transfer: the digest check runs after the
+      # download, so a broken mirror could otherwise fill the runner disk
+      # before the archive is rejected. The cap stays above the real
+      # archive, which is 170498071 bytes.
       status=0
       timeout --kill-after=30 "$TIMEOUT" curl -fL -C - \
         --proto '=https' --proto-redir '=https' \
         --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
+        --max-filesize 200000000 \
         -o cifar-10-python.tar.gz "$url" || status=$?
       if verify; then
         break 2

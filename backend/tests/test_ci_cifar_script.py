@@ -1227,3 +1227,60 @@ def test_invalid_digest_overrides_are_rejected(tmp_path: Path) -> None:
         assert process.returncode == 1, f"{name}={value} was accepted"
         assert f"::error::{name} must be a" in (process.stdout)
         assert "Downloading CIFAR-10 from" not in (process.stdout)
+
+
+def test_the_cache_save_step_cannot_fail_the_job_on_a_reservation_conflict() -> None:
+    """A cache-reservation conflict must not turn a green job red.
+
+    Both workflows save the verified archive under the same immutable key.
+    When they run at the same time on a cold cache, the second save cannot
+    reserve that key and the action fails the step. The cache is an
+    optimisation, so the save step must not be allowed to fail the job.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        _, save = _step_by_name(job, "Save verified CIFAR-10 dataset cache")
+
+        assert (
+            save.get("continue-on-error") is True
+        ), f"{name} can fail the job when the cache key is already reserved"
+
+
+def test_the_download_is_capped_in_size(tmp_path: Path) -> None:
+    """The transfer must not be able to fill the runner disk.
+
+    The digest check runs after the transfer, so a broken or hostile mirror
+    could serve an arbitrarily large body before it is rejected. The curl
+    call therefore carries a size cap that stays above the real archive.
+    """
+    _, calls = _run_script(tmp_path, [MIRROR_URL])
+
+    assert calls, "the script did not call curl"
+    argv = calls[0].argv
+    assert "--max-filesize" in argv, f"the download is not capped: {argv}"
+    index = argv.index("--max-filesize")
+    # The real archive is 170498071 bytes; the cap has to stay above it.
+    assert int(argv[index + 1]) > 170498071, f"the cap is below the archive: {argv}"
+
+
+def test_the_logged_source_cannot_carry_control_characters(tmp_path: Path) -> None:
+    """A control character in a source must not reach the CI log.
+
+    The source list is read line by line, so a source cannot contain a line
+    break, but it can contain other control characters. They are stripped
+    before the source is written to the log.
+    """
+    source = "https://example.test/archive\x01\x1b"
+    process, _ = _run_script(
+        tmp_path,
+        [source],
+        fail_substring="example.test",
+    )
+
+    logged = [
+        line for line in process.stdout.splitlines() if line.startswith("Downloading CIFAR-10 from")
+    ]
+    assert logged, "the source was not logged"
+    for line in logged:
+        assert "\x01" not in line, f"a control character reached the log: {line!r}"
+        assert "\x1b" not in line, f"a control character reached the log: {line!r}"

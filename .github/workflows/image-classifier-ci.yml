@@ -113,10 +113,12 @@ jobs:
         # download under the immutable key poisoned every later run that
         # restored it (self-sustaining failure loop). The versioned key
         # retires the poisoned entry: the verified archive is written under
-        # the new key, so later runs hit it exactly. The save action logs
-        # a cache-reservation conflict and does not fail the job
-        # on its own, so no continue-on-error mask is needed.
+        # the new key, so later runs hit it exactly. Both workflows save
+        # under the same immutable key, so a cold run can make the second
+        # save lose the key reservation. The cache is an optimisation and
+        # not a gate, so that conflict must not fail the job.
         if: success() && steps.cifar-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /home/runner/.cache/cnn-cifar10
