@@ -62,6 +62,20 @@ if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
+# The digest is written into the checksum file that md5sum/sha256sum read, so
+# a value that is not a plain hex digest could name a second file and let
+# that file satisfy the check. Only a lowercase hex digest is accepted,
+# which is the form the checksum tools read.
+if ! [[ "$MD5" =~ ^[0-9a-f]{32}$ ]]; then
+  echo "::error::CIFAR10_MD5 must be a 32 character hex digest, got '$MD5'."
+  exit 1
+fi
+
+if ! [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "::error::CIFAR10_SHA256 must be a 64 character hex digest, got '$SHA256'."
+  exit 1
+fi
+
 mkdir -p "$CACHE_DIR"
 cd "$CACHE_DIR"
 

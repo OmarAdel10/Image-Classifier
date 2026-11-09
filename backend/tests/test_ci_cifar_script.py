@@ -1125,3 +1125,37 @@ def test_invalid_budget_overrides_are_rejected(tmp_path: Path) -> None:
         assert process.returncode == 1, f"{name}={value} was accepted"
         assert f"::error::{name} must be a positive integer" in (process.stdout)
         assert "Downloading CIFAR-10 from" not in (process.stdout)
+
+
+def test_invalid_digest_overrides_are_rejected(tmp_path: Path) -> None:
+    """A broken digest override has to be reported by the script itself.
+
+    The digest is written into the checksum file that ``md5sum -c`` reads, so
+    a value that is not a plain hex digest could name a second file and let
+    that file satisfy the check.
+    """
+    for name, value in (
+        ("CIFAR10_MD5", "not-a-digest"),
+        ("CIFAR10_MD5", "c58f30108f718f92721af3b95e74349a  other-file"),
+        ("CIFAR10_MD5", "C58F30108F718F92721AF3B95E74349A"),
+        ("CIFAR10_SHA256", "not-a-digest"),
+        (
+            "CIFAR10_SHA256",
+            "6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  other-file",
+        ),
+    ):
+        env = dict(os.environ)
+        env[name] = value
+        env["CIFAR10_URLS"] = "https://example.test/good"
+        process = subprocess.run(
+            ["bash", str(SCRIPT), str(tmp_path / "cache")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert process.returncode == 1, f"{name}={value} was accepted"
+        assert f"::error::{name} must be a" in (process.stdout)
+        assert "Downloading CIFAR-10 from" not in (process.stdout)
