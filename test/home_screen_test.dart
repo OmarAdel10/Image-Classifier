@@ -492,7 +492,9 @@ void main() {
           predictCalls++;
           throw const SocketException('first failure');
         }
-        throw const HttpException('second failure');
+        // The backend answered with an error status, so the banner reports
+        // that status instead of blaming the connection.
+        return http.Response('internal failure', 500);
       });
 
       await tester.pumpWidget(
@@ -524,7 +526,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.textContaining('HTTP error while contacting'),
+        find.textContaining('Request failed with status 500'),
         findsOneWidget,
       );
       expect(find.textContaining('Cannot reach'), findsNothing);

@@ -330,7 +330,7 @@ void main() {
       );
 
       test(
-        'an HttpException produces an ApiException with status 502',
+        'an HttpException produces a transport ApiException with status 503',
         () async {
           final mockClient = MockClient((request) async {
             throw const HttpException('connection closed');
@@ -347,9 +347,13 @@ void main() {
                   .having(
                     (e) => e.message,
                     'message',
-                    contains('http://http-error.example.com:8000'),
+                    allOf(
+                      contains('http://http-error.example.com:8000'),
+                      // The raw exception text stays out of the message.
+                      isNot(contains('connection closed')),
+                    ),
                   )
-                  .having((e) => e.statusCode, 'statusCode', 502),
+                  .having((e) => e.statusCode, 'statusCode', 503),
             ),
           );
         },
@@ -423,7 +427,7 @@ void main() {
       });
 
       test(
-        'a ClientException produces an ApiException with status 502',
+        'a ClientException produces a transport ApiException with status 503',
         () async {
           final mockClient = MockClient((request) async {
             throw http.ClientException('connection closed');
@@ -442,10 +446,11 @@ void main() {
                     'message',
                     allOf(
                       contains('http://client-error.example.com:8000'),
-                      contains('connection closed'),
+                      // The raw exception text stays out of the message.
+                      isNot(contains('connection closed')),
                     ),
                   )
-                  .having((e) => e.statusCode, 'statusCode', 502),
+                  .having((e) => e.statusCode, 'statusCode', 503),
             ),
           );
         },
@@ -468,10 +473,9 @@ void main() {
                   (e) => e.message,
                   'message',
                   allOf(
-                    contains(
-                      'Connection to http://io-error.example.com:8000 failed:',
-                    ),
-                    contains('disk error'),
+                    contains('Cannot reach http://io-error.example.com:8000'),
+                    // The raw exception text stays out of the message.
+                    isNot(contains('disk error')),
                   ),
                 )
                 .having((e) => e.statusCode, 'statusCode', 503),
@@ -618,9 +622,13 @@ void main() {
                   .having(
                     (e) => e.message,
                     'message',
-                    contains('http://bytes.example.com:8000'),
+                    allOf(
+                      contains('http://bytes.example.com:8000'),
+                      // The raw exception text stays out of the message.
+                      isNot(contains('connection closed')),
+                    ),
                   )
-                  .having((e) => e.statusCode, 'statusCode', 502),
+                  .having((e) => e.statusCode, 'statusCode', 503),
             ),
           );
         },
@@ -671,7 +679,7 @@ void main() {
           // which reports an unexpected response shape.
           await expectInvalidJsonResponse(
             '[1,2]',
-            messageContains: 'Invalid JSON response',
+            messageContains: 'could not be parsed as the expected JSON',
           );
         },
       );

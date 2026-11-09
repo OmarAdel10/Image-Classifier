@@ -122,9 +122,11 @@ class ApiClient {
     final http.MultipartFile upload;
     try {
       upload = await http.MultipartFile.fromPath('file', imageFile.path);
-    } on FileSystemException catch (e) {
+    } on IOException {
+      // The file cannot be read. The message names the problem only: the
+      // local path stays out of the text that reaches the screen.
       throw ApiException(
-        message: 'Could not read the image file: ${e.message}',
+        message: 'Could not read the image file.',
         statusCode: 400,
       );
     }
@@ -135,12 +137,12 @@ class ApiClient {
       final http.StreamedResponse streamedResponse;
       try {
         streamedResponse = await client.send(request).timeout(_timeout);
-      } on FileSystemException catch (e) {
+      } on FileSystemException {
         // The file passed the size check but could not be read while the
         // body was streamed. That is a problem with the local file, not with
-        // the connection to the backend.
+        // the connection to the backend. The path stays out of the message.
         throw ApiException(
-          message: 'Could not read the image file: ${e.message}',
+          message: 'Could not read the image file.',
           statusCode: 400,
         );
       }
@@ -243,32 +245,18 @@ class ApiClient {
         statusCode: 408,
       );
     } on SocketException {
-      throw ApiException(
-        message:
-            'Cannot reach $url. Check that the backend is running and that '
-            'the address is reachable from this device.',
-        statusCode: 503,
-      );
-    } on http.ClientException catch (e) {
-      throw ApiException(
-        message:
-            'Connection to $url failed: ${e.message}. '
-            'Check that the backend is running and reachable from this device.',
-        statusCode: 502,
-      );
+      throw _transportFailure(url);
+    } on http.ClientException {
+      throw _transportFailure(url);
     } on HttpException {
+      throw _transportFailure(url);
+    } on IOException {
+      throw _transportFailure(url);
+    } on FormatException {
       throw ApiException(
-        message: 'HTTP error while contacting $url.',
-        statusCode: 502,
-      );
-    } on IOException catch (e) {
-      throw ApiException(
-        message: 'Connection to $url failed: $e.',
-        statusCode: 503,
-      );
-    } on FormatException catch (e) {
-      throw ApiException(
-        message: 'Invalid response from $url: ${e.message}',
+        message:
+            'Invalid response from $url. '
+            'The response could not be parsed as the expected JSON.',
         statusCode: 502,
       );
     } on TypeError {
@@ -302,9 +290,25 @@ class ApiClient {
     );
   }
 
+  /// The failure of a request that never reached an answer.
+  ///
+  /// Every transport failure - a refused socket, a broken connection, an
+  /// HTTP error and an I/O error - carries the same status code and the same
+  /// message, so one problem can never be reported under two different
+  /// codes. The raw exception text stays out of the message: it can name
+  /// internal details of the TLS stack or of the file system.
+  ApiException _transportFailure(String url) {
+    return ApiException(
+      message:
+          'Cannot reach $url. Check that the backend is running and that '
+          'the address is reachable from this device.',
+      statusCode: 503,
+    );
+  }
+
   ApiException _toApiException(http.Response response) {
     return ApiException(
-      message: _parseErrorMessage(response.body),
+      message: _parseErrorMessage(response.body, response.statusCode),
       statusCode: response.statusCode,
     );
   }
@@ -328,7 +332,12 @@ class ApiClient {
     }
   }
 
-  String _parseErrorMessage(String body) {
+  /// Builds the message of a failed request.
+  ///
+  /// The `detail` field of a JSON error body is written for the user, so it
+  /// is shown. Every other body is dropped: the raw response body can carry
+  /// anything the server sent, including internal details and payload.
+  String _parseErrorMessage(String body, int statusCode) {
     try {
       final json = _parseJson(body);
       if (json is Map<String, dynamic> && json['detail'] != null) {
@@ -340,7 +349,7 @@ class ApiClient {
     } catch (_) {
       // Fall through to default message
     }
-    return _sanitizeErrorMessage('Request failed with status $body');
+    return _sanitizeErrorMessage('Request failed with status $statusCode');
   }
 
   /// Sanitizes error messages to prevent leaking sensitive data.

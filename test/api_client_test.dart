@@ -252,7 +252,7 @@ void main() {
             isA<ApiException>().having(
               (e) => e.message,
               'message',
-              'Request failed with status oopshtml not json',
+              'Request failed with status 502',
             ),
           ),
         );
@@ -279,7 +279,7 @@ void main() {
           isA<ApiException>().having(
             (e) => e.message,
             'message',
-            'Request failed with status $body',
+            'Request failed with status 422',
           ),
         ),
       );
@@ -622,8 +622,9 @@ void main() {
                   (e) => e.message,
                   'message',
                   allOf(
-                    // The message names the reason, not only the problem.
-                    matches(RegExp(r'^Could not read the image file: .+$')),
+                    // The message names the problem, without the local path
+                    // and without the raw exception text.
+                    'Could not read the image file.',
                     // A file that cannot be read is not a connection problem.
                     isNot(contains('Connection to')),
                     isNot(contains('Cannot reach')),
@@ -653,7 +654,7 @@ void main() {
                     (e) => e.message,
                     'message',
                     allOf(
-                      matches(RegExp(r'^Could not read the image file: .+$')),
+                      'Could not read the image file.',
                       isNot(contains('Connection to')),
                       // The local path of the removed file stays out of the
                       // message that reaches the screen.
@@ -680,7 +681,7 @@ void main() {
                   (e) => e.message,
                   'message',
                   allOf(
-                    matches(RegExp(r'^Could not read the image file: .+$')),
+                    'Could not read the image file.',
                     isNot(contains('Connection to')),
                   ),
                 )
