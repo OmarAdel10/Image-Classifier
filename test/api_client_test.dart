@@ -123,6 +123,21 @@ class _FileFaultOnSendClient extends http.BaseClient {
   }
 }
 
+/// A client whose send fails with an error that names nothing useful.
+///
+/// The error text is private to the client, so it must never reach the user.
+class _SendFaultClient extends http.BaseClient {
+  _SendFaultClient(this.fault);
+
+  /// The failure the send reports.
+  final Object fault;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    throw fault;
+  }
+}
+
 void main() {
   group('ApiClient', () {
     late MockClient mockClient;
@@ -1249,6 +1264,141 @@ void main() {
           expect(await apiClient.healthStatusCode(), isNull);
         },
       );
+    });
+
+    group('the error taxonomy', () {
+      final bodyFaults = <(String, Object)>[
+        ('an http exception', HttpException('secret body detail')),
+        ('an unknown io exception', HandshakeException('secret body detail')),
+        ('a plain exception', Exception('secret body detail')),
+        ('a state error', StateError('secret body detail')),
+      ];
+
+      for (final (label, fault) in bodyFaults) {
+        test(
+          'a body that fails with $label is reported as a response problem',
+          () async {
+            final file = _createTempImageFile();
+            final apiClient = ApiClient(client: _BrokenBodyClient(fault));
+
+            await expectLater(
+              apiClient.predict(file),
+              throwsA(
+                isA<ApiException>()
+                    .having((e) => e.statusCode, 'statusCode', 502)
+                    .having(
+                      (e) => e.message,
+                      'message',
+                      allOf(
+                        contains('Could not read the response from'),
+                        // The backend answered, so the connection was fine.
+                        isNot(contains('Cannot reach')),
+                        // The raw error text must not reach the screen.
+                        isNot(contains('secret body detail')),
+                        isNot(contains('Bad state')),
+                      ),
+                    ),
+              ),
+            );
+          },
+        );
+      }
+
+      test(
+        'a body that fails while the bytes are uploaded is a response problem',
+        () async {
+          final apiClient = ApiClient(
+            client: _BrokenBodyClient(HandshakeException('secret body detail')),
+          );
+
+          await expectLater(
+            apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.statusCode, 'statusCode', 502)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the response from'),
+                      isNot(contains('Cannot reach')),
+                      isNot(contains('secret body detail')),
+                    ),
+                  ),
+            ),
+          );
+        },
+      );
+
+      test(
+        'a body that fails while the model info is read is a response problem',
+        () async {
+          final apiClient = ApiClient(
+            client: _BrokenBodyClient(HandshakeException('secret body detail')),
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.statusCode, 'statusCode', 502)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the response from'),
+                      isNot(contains('Cannot reach')),
+                      isNot(contains('secret body detail')),
+                    ),
+                  ),
+            ),
+          );
+        },
+      );
+
+      final sendFaults = <(String, Object)>[
+        ('a plain exception', Exception('secret send detail')),
+        ('a state error', StateError('secret send detail')),
+      ];
+
+      for (final (label, fault) in sendFaults) {
+        test(
+          'a send that fails with $label is reported as a transport failure',
+          () async {
+            final file = _createTempImageFile();
+            final apiClient = ApiClient(client: _SendFaultClient(fault));
+
+            await expectLater(
+              apiClient.predict(file),
+              throwsA(
+                isA<ApiException>()
+                    .having((e) => e.statusCode, 'statusCode', 503)
+                    .having(
+                      (e) => e.message,
+                      'message',
+                      allOf(
+                        contains('Cannot reach'),
+                        // The raw error text must not reach the screen.
+                        isNot(contains('secret send detail')),
+                        isNot(contains('Bad state')),
+                      ),
+                    ),
+              ),
+            );
+          },
+        );
+      }
+
+      for (final (label, fault) in sendFaults) {
+        test(
+          'a health check that fails with $label reports no status',
+          () async {
+            final apiClient = ApiClient(client: _SendFaultClient(fault));
+
+            expect(await apiClient.healthStatusCode(), isNull);
+          },
+        );
+      }
     });
 
     test('dispose leaves a caller owned client usable', () async {

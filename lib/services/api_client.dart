@@ -17,6 +17,11 @@ import 'package:image_classifier/models/prediction.dart';
 /// that never reached an answer, 400 for a local file fault, 502 for a
 /// response that could not be read or parsed, and 503 for a transport
 /// failure.
+///
+/// Every failure is named this way. A failure that carries its own text (a
+/// socket error, a client exception, a state error) never reaches the user:
+/// the message is fixed and the status code names the class, so no raw error
+/// text can escape the client.
 class ApiException implements Exception {
   const ApiException({required this.message, required this.statusCode});
 
@@ -100,6 +105,13 @@ class ApiClient {
       return null;
     } on IOException {
       return null;
+    } on Exception {
+      // The client failed in a way this list does not name. The health check
+      // only answers with a status code, so an unnamed failure means the
+      // backend cannot be reached.
+      return null;
+    } on Error {
+      return null;
     }
   }
 
@@ -114,23 +126,13 @@ class ApiClient {
       final streamedResponse = await client
           .send(http.Request('GET', Uri.parse('$url/model-info')))
           .timeout(_timeout);
-      final http.Response response;
-      try {
-        response = await _readResponseBody(
-          streamedResponse,
-          _remainingBudget(stopwatch),
-        );
-      } on TimeoutException {
-        // The response arrived, so the body was not read in time. That is a
-        // response problem, not a request that never reached an answer.
-        throw _responseReadFailure(url);
-      } on http.ClientException {
-        throw _responseReadFailure(url);
-      } on SocketException {
-        throw _responseReadFailure(url);
-      } on FileSystemException {
-        throw _responseReadFailure(url);
-      }
+      // The reader reports every failure of the body as the same response
+      // failure, so no transport error text can reach the user.
+      final http.Response response = await _readResponseBody(
+        streamedResponse,
+        _remainingBudget(stopwatch),
+        url,
+      );
 
       if (response.statusCode == 200) {
         return ModelInfo.fromJson(_parseJsonMap(response.body));
@@ -179,28 +181,15 @@ class ApiClient {
           statusCode: 400,
         );
       }
-      final http.Response response;
-      try {
-        // The body read is bounded too: a backend that sends the status code
-        // and then stalls would otherwise keep the request pending forever.
-        response = await _readResponseBody(
-          streamedResponse,
-          _remainingBudget(stopwatch),
-        );
-      } on TimeoutException {
-        // The response arrived, so the body was not read in time. That is a
-        // response problem, not a request that never reached an answer.
-        throw _responseReadFailure(url);
-      } on http.ClientException {
-        // The body was cut short after the status line arrived. The backend
-        // answered, so this is not a connection problem.
-        throw _responseReadFailure(url);
-      } on SocketException {
-        throw _responseReadFailure(url);
-      } on FileSystemException {
-        // A custom client can read the body from the file system.
-        throw _responseReadFailure(url);
-      }
+      // The body read is bounded too: a backend that sends the status code
+      // and then stalls would otherwise keep the request pending forever.
+      // The reader reports every failure of the body as the same response
+      // failure, so no transport error text can reach the user.
+      final http.Response response = await _readResponseBody(
+        streamedResponse,
+        _remainingBudget(stopwatch),
+        url,
+      );
 
       if (response.statusCode == 200) {
         return PredictionResponse.fromJson(_parseJsonMap(response.body));
@@ -248,28 +237,15 @@ class ApiClient {
           statusCode: 400,
         );
       }
-      final http.Response response;
-      try {
-        // The body read is bounded too: a backend that sends the status code
-        // and then stalls would otherwise keep the request pending forever.
-        response = await _readResponseBody(
-          streamedResponse,
-          _remainingBudget(stopwatch),
-        );
-      } on TimeoutException {
-        // The response arrived, so the body was not read in time. That is a
-        // response problem, not a request that never reached an answer.
-        throw _responseReadFailure(url);
-      } on http.ClientException {
-        // The body was cut short after the status line arrived. The backend
-        // answered, so this is not a connection problem.
-        throw _responseReadFailure(url);
-      } on SocketException {
-        throw _responseReadFailure(url);
-      } on FileSystemException {
-        // A custom client can read the body from the file system.
-        throw _responseReadFailure(url);
-      }
+      // The body read is bounded too: a backend that sends the status code
+      // and then stalls would otherwise keep the request pending forever.
+      // The reader reports every failure of the body as the same response
+      // failure, so no transport error text can reach the user.
+      final http.Response response = await _readResponseBody(
+        streamedResponse,
+        _remainingBudget(stopwatch),
+        url,
+      );
 
       if (response.statusCode == 200) {
         return PredictionResponse.fromJson(_parseJsonMap(response.body));
@@ -296,6 +272,11 @@ class ApiClient {
   Future<T> _handleRequest<T>(String url, Future<T> Function() request) async {
     try {
       return await request();
+    } on ApiException {
+      // The request already named the failure class (a local file problem or
+      // a response that could not be read). The catch all below must not
+      // rename it as a transport failure.
+      rethrow;
     } on TimeoutException {
       throw ApiException(
         message:
@@ -330,6 +311,14 @@ class ApiClient {
       // ArgumentError here comes from the request, not from the URL. The raw
       // exception text is dropped: a custom client can carry any text in it.
       throw ApiException(message: 'Invalid request to $url.', statusCode: 502);
+    } on Exception {
+      // The client failed in a way this list does not name. The request never
+      // reached an answer, so it is a transport failure. The raw error text is
+      // dropped: a custom client can carry any text in it.
+      throw _transportFailure(url);
+    } on Error {
+      // The same holds for an error that is not an exception.
+      throw _transportFailure(url);
     }
   }
 
@@ -349,30 +338,34 @@ class ApiClient {
   /// response but leaves the body stream subscribed, so the transfer would
   /// keep running and the connection would stay open after the request was
   /// abandoned.
+  ///
+  /// Every failure of the read is reported as the same response failure: the
+  /// status line arrived, so the backend answered and the transfer failed
+  /// after that. The error that ended the read never leaves this method.
   Future<http.Response> _readResponseBody(
     http.StreamedResponse streamedResponse,
     Duration budget,
+    String url,
   ) async {
     if (budget <= Duration.zero) {
-      throw TimeoutException(
-        'The response body was not read in time.',
-        _timeout,
-      );
+      // The budget is spent, so the body cannot be read any more.
+      throw _responseReadFailure(url);
     }
     final completer = Completer<http.Response>();
     final buffer = BytesBuilder(copy: false);
     final timer = Timer(budget, () {
       if (!completer.isCompleted) {
-        completer.completeError(
-          TimeoutException('The response body was not read in time.', budget),
-        );
+        completer.completeError(_responseReadFailure(url));
       }
     });
     final subscription = streamedResponse.stream.listen(
       buffer.add,
       onError: (Object error, StackTrace stackTrace) {
         if (!completer.isCompleted) {
-          completer.completeError(error, stackTrace);
+          // The transport failed after the status line arrived. The error is
+          // dropped: it can carry any text, and the status code names the
+          // failure class.
+          completer.completeError(_responseReadFailure(url), stackTrace);
         }
       },
       onDone: () {

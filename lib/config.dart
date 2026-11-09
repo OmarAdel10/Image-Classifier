@@ -2,6 +2,16 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// A configuration failure whose message is safe to show to the user.
+///
+/// The message is written by hand in this file, so it never carries a path,
+/// a credential or the text of another exception. Any other failure is
+/// reported with a fixed message instead, so an unexpected error can never
+/// put its own text on the screen.
+class ApiConfigError extends StateError {
+  ApiConfigError(super.message);
+}
+
 /// Application configuration constants.
 class Config {
   Config._();
@@ -109,7 +119,7 @@ class Config {
       // redirect. A refused removal is reported instead of being swallowed,
       // so callers never claim a reset that did not happen.
       if (!await clearApiBaseUrl()) {
-        throw StateError('Could not clear the stored API base URL.');
+        throw ApiConfigError('Could not clear the stored API base URL.');
       }
       return;
     }
@@ -121,7 +131,7 @@ class Config {
       );
     }
     if (compileTimeOverride.isNotEmpty) {
-      throw StateError(
+      throw ApiConfigError(
         'Refusing to store a runtime API base URL while '
         '--dart-define=API_BASE_URL is set.',
       );
@@ -130,7 +140,7 @@ class Config {
     try {
       prefs = await SharedPreferences.getInstance();
     } catch (_) {
-      throw StateError('Could not store the API base URL.');
+      throw ApiConfigError('Could not store the API base URL.');
     }
     // The value that is in use before the write, so the rollback can put it
     // back if the platform cannot be read any more. The read is guarded:
@@ -147,14 +157,14 @@ class Config {
       stored = await prefs.setString(apiBaseUrlPrefsKey, normalized);
     } catch (_) {
       await _rollbackStoredUrl(prefs, previous);
-      throw StateError('Could not store the API base URL.');
+      throw ApiConfigError('Could not store the API base URL.');
     }
     if (!stored) {
       // The platform refused the write. Reload the persisted state, so the
       // app keeps using the URL that is actually stored instead of the one
       // that was never saved.
       await _rollbackStoredUrl(prefs, previous);
-      throw StateError('Could not store the API base URL.');
+      throw ApiConfigError('Could not store the API base URL.');
     }
   }
 
@@ -226,11 +236,18 @@ class Config {
   static bool isValidApiBaseUrl(String url) {
     final trimmed = url.trim();
     if (trimmed.isEmpty || RegExp(r'\s').hasMatch(trimmed)) return false;
+    // A control character is rejected anywhere: the Uri parser percent-
+    // encodes it, so the address that reaches the backend would not be the
+    // address that was reviewed.
+    if (RegExp(r'[\x00-\x1F\x7F]').hasMatch(trimmed)) return false;
     // Percent-encoding is rejected anywhere, not just in the host: the base
     // URL is concatenated with '/health' and '/predict', so an encoded
     // segment in the path could resolve to a different effective path than
     // the one that was reviewed.
     if (trimmed.contains('%')) return false;
+    // A path segment that walks up is rejected: the Uri parser removes it,
+    // so the path that is sent would not be the path that was reviewed.
+    if (trimmed.split('/').any((segment) => segment == '..')) return false;
     final uri = Uri.tryParse(trimmed);
     if (uri == null) return false;
     if (uri.scheme != 'http' && uri.scheme != 'https') return false;
@@ -240,14 +257,14 @@ class Config {
     return true;
   }
 
-  /// Enforcement half of [isValidApiBaseUrl] (IC-60): throws [StateError]
+  /// Enforcement half of [isValidApiBaseUrl] (IC-60): throws [ApiConfigError]
   /// when [url] is not a well-formed http(s) base URL.
   ///
   /// The error message is deliberately generic so a credential-bearing
   /// override is never echoed into crash logs.
   static void ensureValidApiBaseUrl(String url) {
     if (!isValidApiBaseUrl(url)) {
-      throw StateError(
+      throw ApiConfigError(
         'Invalid API_BASE_URL: must be a well-formed http/https URL with '
         'a host and no query or fragment.',
       );

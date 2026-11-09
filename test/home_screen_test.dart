@@ -353,10 +353,9 @@ void main() {
       await _tapDropZoneAndSettle(tester);
 
       expect(find.textContaining('Could not load model info'), findsOneWidget);
-      expect(
-        find.textContaining('An unexpected error occurred.'),
-        findsOneWidget,
-      );
+      // The client names the failure class with a fixed message, so the raw
+      // text of the failure never reaches the screen.
+      expect(find.textContaining('Cannot reach'), findsOneWidget);
       expect(find.textContaining('Bad state:'), findsNothing);
       expect(find.textContaining('backend exploded'), findsNothing);
       expect(find.textContaining('StateError'), findsNothing);

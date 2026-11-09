@@ -10,15 +10,27 @@ import 'package:image_classifier/services/api_client.dart';
 /// control characters and shortened before it reaches a message. A banner
 /// stays readable and cannot carry a pasted payload. The credentials of an
 /// address are removed as well, so a banner never repeats a secret.
+/// The address as it is shown in a banner.
+///
+/// A credential is removed from the address: the banner is shown on screen
+/// and written to logs, so a password must not be part of it. The removal
+/// works on the authority (the part between the scheme and the path), and the
+/// last at sign wins, so a password that carries an at sign cannot hide the
+/// host or leave the tail of the password behind.
 String _displayUrl(String url) {
-  final cleaned = url
-      .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '')
-      .replaceFirstMapped(
-        RegExp(r'^(https?://)[^/@]*@'),
-        (match) => match.group(1)!,
-      );
-  if (cleaned.length <= 120) return cleaned;
-  return '${cleaned.substring(0, 119)}…';
+  final cleaned = url.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
+  final match = RegExp(r'^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)')
+      .firstMatch(cleaned);
+  if (match == null) return cleaned;
+  final scheme = match.group(1) ?? '';
+  final authority = match.group(2) ?? '';
+  final at = authority.lastIndexOf('@');
+  final sanitized = at < 0
+      ? cleaned
+      : '$scheme${authority.substring(at + 1)}'
+            '${cleaned.substring(match.end)}';
+  if (sanitized.length <= 120) return sanitized;
+  return '${sanitized.substring(0, 119)}…';
 }
 
 /// Screen for configuring the backend API base URL at runtime.
@@ -87,13 +99,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// Renders an error for the user without the raw Dart exception wrapper.
   ///
-  /// [StateError] carries a message that is written for humans, but
-  /// `toString()` prefixes it with 'Bad state:'. A missing provider is
-  /// reported with its own text, because it names the provider the screen
-  /// needs. Every other error is reported as an unexpected failure: its own
-  /// text can carry internal details that do not belong on the screen.
+  /// Only a configuration error carries a message that is safe to show: it is
+  /// written by hand in `config.dart` and never repeats a path, a credential
+  /// or the text of another exception. Every other error is reported as an
+  /// unexpected failure, because its own text can carry internal details that
+  /// do not belong on the screen. A missing provider is reported with its own
+  /// text, because it names the provider the screen needs.
   static String _describeError(Object error) {
-    if (error is StateError) return error.message;
+    if (error is ApiConfigError) return error.message;
     if (error is ProviderNotFoundException) return error.toString();
     return 'an unexpected error occurred';
   }

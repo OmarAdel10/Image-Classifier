@@ -225,6 +225,36 @@ void main() {
         // to reject it explicitly.
         expect(Config.isValidApiBaseUrl('http://example.com:-1'), isFalse);
       });
+
+      test('rejects a URL with a control character in the host', () {
+        // The Uri parser percent-encodes the host, so the address would reach
+        // the backend in a form nobody wrote.
+        expect(
+          Config.isValidApiBaseUrl('http://exa\x01mple.com:8000'),
+          isFalse,
+        );
+      });
+
+      test('rejects a URL with a null character', () {
+        expect(
+          Config.isValidApiBaseUrl('http://exa\x00mple.com:8000'),
+          isFalse,
+        );
+      });
+
+      test('rejects a URL whose path walks up', () {
+        // The Uri parser removes the segment, so the path that is checked
+        // would not be the path that is sent.
+        expect(Config.isValidApiBaseUrl('http://example.com/../etc'), isFalse);
+      });
+
+      test('accepts a URL with a path below the host', () {
+        expect(Config.isValidApiBaseUrl('http://example.com/api'), isTrue);
+      });
+
+      test('accepts a URL with an IPv6 host', () {
+        expect(Config.isValidApiBaseUrl('http://[::1]:8000'), isTrue);
+      });
     });
 
     group('validateStartupApiBaseUrl', () {

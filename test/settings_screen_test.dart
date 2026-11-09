@@ -803,19 +803,12 @@ void main() {
         await tester.pump();
         await tester.pumpAndSettle();
 
-        expect(
-          find.textContaining(
-            'Could not test ${Config.platformDefaultApiBaseUrl}',
-          ),
-          findsOneWidget,
-        );
-        // The banner names the cause of the failure, so the user is not left
-        // guessing what went wrong. The text of the exception itself stays
+        // The probe failed without an answer, so the banner reports that the
+        // backend could not be reached. The text of the exception itself stays
         // out of the banner: it can carry internal details.
         expect(
           find.textContaining(
-            'Could not test ${Config.platformDefaultApiBaseUrl}: '
-            'an unexpected error occurred',
+            'Could not reach ${Config.platformDefaultApiBaseUrl}',
           ),
           findsOneWidget,
         );
@@ -848,31 +841,51 @@ void main() {
       // The banner stays readable: the address is shortened. The field
       // itself still holds what the user typed, so the assertion looks at
       // the banner only.
-      final banner = tester.widget<Text>(find.textContaining('Could not test'));
+      final banner = tester.widget<Text>(
+        find.textContaining('Could not reach'),
+      );
       expect(banner.data, contains('…'));
       expect(banner.data, isNot(contains(longUrl)));
     });
 
-    testWidgets('a control character is removed from the banner', (
+    testWidgets('a control character in the field is rejected', (
       WidgetTester tester,
     ) async {
-      final mockClient = MockClient((request) async {
-        throw Exception('boom');
-      });
-      // A control character passes the address validation, so the banner is
-      // the only place where it can be removed.
-      final urlWithControlCharacter = 'http://exa\x01mple.com:8000';
-
-      await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          MockClient((request) async => http.Response('{}', 200)),
+        ).widget,
+      );
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byType(TextField), urlWithControlCharacter);
-      await tester.tap(_buttonWithLabel('Test Connection'));
-      await tester.pump();
+      await tester.enterText(
+        find.byType(TextField),
+        'http://exa\x01mple.com:8000',
+      );
+      await tester.pumpAndSettle();
+
+      // The address is refused, so the request is never made with it.
+      expect(
+        find.text('Not a valid URL — use http:// or https:// with a host'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a control character in the pinned address is not shown', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          http.Client(),
+          compileTimeOverride: 'http://exa\x01mple.com:8000',
+        ).widget,
+      );
       await tester.pumpAndSettle();
 
       // The banner carries the address without the control character.
-      final banner = tester.widget<Text>(find.textContaining('Could not test'));
+      final banner = tester.widget<Text>(
+        find.textContaining('Pinned by --dart-define'),
+      );
       expect(banner.data, isNot(contains('\x01')));
       expect(banner.data, contains('http://example.com:8000'));
     });
@@ -893,6 +906,55 @@ void main() {
       );
       expect(banner.data, isNot(contains('user:pass')));
       expect(banner.data, contains('http://pinned.example.com:8000'));
+    });
+
+    testWidgets('a credential variant in the pinned address is not shown', (
+      WidgetTester tester,
+    ) async {
+      // A password that carries an at sign, a scheme in capitals and a
+      // leading space all hide a credential from a simple prefix match.
+      const variants = <String>[
+        'http://user:p@ss@host:8000',
+        'HTTP://user:pass@host:8000',
+        ' http://user:pass@host:8000',
+      ];
+
+      for (final variant in variants) {
+        await tester.pumpWidget(
+          _buildSettingsScreen(
+            http.Client(),
+            compileTimeOverride: variant,
+          ).widget,
+        );
+        await tester.pumpAndSettle();
+
+        final banner = tester.widget<Text>(
+          find.textContaining('Pinned by --dart-define'),
+        );
+        expect(banner.data, isNot(contains('user')));
+        expect(banner.data, isNot(contains('pass')));
+        expect(banner.data, isNot(contains('ss')));
+        expect(banner.data, contains('host:8000'));
+      }
+    });
+
+    testWidgets('a client failure never puts its message in the banner', (
+      WidgetTester tester,
+    ) async {
+      final mockClient = MockClient((request) async {
+        throw StateError('secret internal detail');
+      });
+
+      await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+      await tester.pumpAndSettle();
+
+      await tester.tap(_buttonWithLabel('Test Connection'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // The text of an unexpected failure stays out of the banner.
+      expect(find.textContaining('secret internal detail'), findsNothing);
+      expect(find.textContaining('Bad state:'), findsNothing);
     });
 
     group('unmounted while a request is in flight', () {
