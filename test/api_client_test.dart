@@ -63,17 +63,17 @@ class _DeletingClient extends http.BaseClient {
 /// The connection succeeds and the status code is delivered, but reading the
 /// body fails. That is a transfer problem, not a connection problem.
 class _BrokenBodyClient extends http.BaseClient {
+  _BrokenBodyClient(this.fault);
+
+  /// The failure the body stream reports.
+  ///
+  /// A truncated body is reported by the real transport as a
+  /// [http.ClientException]; a socket error arrives as a [SocketException].
+  final Object fault;
+
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
-    return http.StreamedResponse(
-      Stream<List<int>>.error(
-        FileSystemException(
-          'the response body could not be read',
-          request.url.path,
-        ),
-      ),
-      200,
-    );
+    return http.StreamedResponse(Stream<List<int>>.error(fault), 200);
   }
 }
 
@@ -691,9 +691,15 @@ void main() {
     });
 
     group('response read failures', () {
-      test('a response body that cannot be read is not a connection error', () async {
+      test('a truncated response body is not a connection error', () async {
+        // The real transport reports a body that was cut short as a client
+        // exception, not as a file system failure.
         final file = _createTempImageFile();
-        final apiClient = ApiClient(client: _BrokenBodyClient());
+        final apiClient = ApiClient(
+          client: _BrokenBodyClient(
+            http.ClientException('Connection closed while receiving data.'),
+          ),
+        );
 
         await expectLater(
           apiClient.predict(file),
@@ -704,9 +710,11 @@ void main() {
                   'message',
                   allOf(
                     contains('Could not read the response from'),
-                    // The transfer failed, but the connection was established.
+                    // The backend answered, so the connection was fine.
                     isNot(contains('Connection to')),
                     isNot(contains('Cannot reach')),
+                    // The raw transport text must not reach the screen.
+                    isNot(contains('Connection closed while receiving data')),
                   ),
                 )
                 .having((e) => e.statusCode, 'statusCode', 502),
@@ -715,9 +723,77 @@ void main() {
       });
 
       test(
+        'a socket error while the body is read is not a connection error',
+        () async {
+          final file = _createTempImageFile();
+          final apiClient = ApiClient(
+            client: _BrokenBodyClient(
+              SocketException('Connection reset by peer'),
+            ),
+          );
+
+          await expectLater(
+            apiClient.predict(file),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the response from'),
+                      isNot(contains('Connection to')),
+                      isNot(contains('Cannot reach')),
+                      isNot(contains('Connection reset by peer')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test(
+        'a response body that cannot be read is not a connection error',
+        () async {
+          final file = _createTempImageFile();
+          final apiClient = ApiClient(
+            client: _BrokenBodyClient(
+              FileSystemException(
+                'the response body could not be read',
+                '/tmp/image_classifier_response',
+              ),
+            ),
+          );
+
+          await expectLater(
+            apiClient.predict(file),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the response from'),
+                      // The transfer failed, but the connection was
+                      // established.
+                      isNot(contains('Connection to')),
+                      isNot(contains('Cannot reach')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test(
         'a response body that cannot be read fails the byte upload too',
         () async {
-          final apiClient = ApiClient(client: _BrokenBodyClient());
+          final apiClient = ApiClient(
+            client: _BrokenBodyClient(
+              http.ClientException('Connection closed while receiving data.'),
+            ),
+          );
 
           await expectLater(
             apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),

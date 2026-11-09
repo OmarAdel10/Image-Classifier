@@ -150,14 +150,15 @@ class ApiClient {
         // and then stalls would otherwise keep the request pending forever.
         response = await http.Response.fromStream(streamedResponse)
             .timeout(_timeout);
+      } on http.ClientException {
+        // The body was cut short after the status line arrived. The backend
+        // answered, so this is not a connection problem.
+        throw _responseReadFailure(url);
+      } on SocketException {
+        throw _responseReadFailure(url);
       } on FileSystemException {
-        // The response body could not be read. The transfer failed, but the
-        // connection itself was established, so this is not a connection
-        // error and the backend must not be blamed for it.
-        throw ApiException(
-          message: 'Could not read the response from $url.',
-          statusCode: 502,
-        );
+        // A custom client can read the body from the file system.
+        throw _responseReadFailure(url);
       }
 
       if (response.statusCode == 200) {
@@ -198,14 +199,15 @@ class ApiClient {
         // and then stalls would otherwise keep the request pending forever.
         response = await http.Response.fromStream(streamedResponse)
             .timeout(_timeout);
+      } on http.ClientException {
+        // The body was cut short after the status line arrived. The backend
+        // answered, so this is not a connection problem.
+        throw _responseReadFailure(url);
+      } on SocketException {
+        throw _responseReadFailure(url);
       } on FileSystemException {
-        // The response body could not be read. The transfer failed, but the
-        // connection itself was established, so this is not a connection
-        // error and the backend must not be blamed for it.
-        throw ApiException(
-          message: 'Could not read the response from $url.',
-          statusCode: 502,
-        );
+        // A custom client can read the body from the file system.
+        throw _responseReadFailure(url);
       }
 
       if (response.statusCode == 200) {
@@ -286,6 +288,18 @@ class ApiClient {
         statusCode: 502,
       );
     }
+  }
+
+  /// The failure of a response body that could not be read.
+  ///
+  /// The status line arrived, so the backend answered and the connection was
+  /// established. The transfer failed after that, which is not a connection
+  /// problem, so the backend must not be blamed for it.
+  ApiException _responseReadFailure(String url) {
+    return ApiException(
+      message: 'Could not read the response from $url.',
+      statusCode: 502,
+    );
   }
 
   ApiException _toApiException(http.Response response) {
