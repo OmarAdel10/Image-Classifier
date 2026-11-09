@@ -71,11 +71,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// Renders an error for the user without the raw Dart exception wrapper.
   ///
   /// [StateError] carries a message that is written for humans, but
-  /// `toString()` prefixes it with 'Bad state:'. Every other error keeps its
-  /// own `toString()`, which names the error type.
+  /// `toString()` prefixes it with 'Bad state:'. A missing provider is
+  /// reported with its own text, because it names the provider the screen
+  /// needs. Every other error is reported as an unexpected failure: its own
+  /// text can carry internal details that do not belong on the screen.
   static String _describeError(Object error) {
     if (error is StateError) return error.message;
-    return error.toString();
+    if (error is ProviderNotFoundException) return error.toString();
+    return 'an unexpected error occurred';
+  }
+
+  /// Shortens an address for a banner.
+  ///
+  /// The field accepts anything the user types, so the address is stripped
+  /// of control characters and shortened before it reaches a message. A
+  /// banner stays readable and cannot carry a pasted payload.
+  static String _displayUrl(String url) {
+    final cleaned = url.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '');
+    if (cleaned.length <= 120) return cleaned;
+    return '${cleaned.substring(0, 119)}…';
   }
 
   Future<void> _testConnection() async {
@@ -100,15 +114,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         if (statusCode == 200) {
           _statusIsError = false;
-          _statusMessage = 'Connected to $url';
+          _statusMessage = 'Connected to ${_displayUrl(url)}';
         } else if (statusCode != null) {
           _statusIsError = true;
           _statusMessage =
-              'Reached $url, but /health returned HTTP $statusCode. '
+              'Reached ${_displayUrl(url)}, but /health returned HTTP '
+              '$statusCode. '
               'The backend is running but not healthy.';
         } else {
           _statusIsError = true;
-          _statusMessage = 'Could not reach $url — is the backend running?';
+          _statusMessage =
+              'Could not reach ${_displayUrl(url)} — is the backend running?';
         }
       });
     } catch (e) {
@@ -118,7 +134,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         // The probe never raises an ApiException: healthStatusCode() reports
         // an unreachable backend as a null status code instead of throwing.
         // The generic renderer therefore names the actual cause.
-        _statusMessage = 'Could not test $url: ${_describeError(e)}';
+        _statusMessage =
+            'Could not test ${_displayUrl(url)}: ${_describeError(e)}';
       });
     } finally {
       if (mounted) {
@@ -147,7 +164,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _statusIsError = true;
-        _statusMessage = 'Could not save $url: ${_describeError(e)}';
+        _statusMessage =
+            'Could not save ${_displayUrl(url)}: ${_describeError(e)}';
       });
       return;
     }
@@ -156,7 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() {
       _statusIsError = false;
-      _statusMessage = 'Saved. Using $url';
+      _statusMessage = 'Saved. Using ${_displayUrl(url)}';
     });
   }
 
@@ -200,7 +218,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _statusMessage = override.isNotEmpty
           ? 'Cleared the stored URL; --dart-define=API_BASE_URL=$override '
                 'still applies.'
-          : 'Reset to default ($url)';
+          : 'Reset to default (${_displayUrl(url)})';
     });
     _controller.text = url;
   }

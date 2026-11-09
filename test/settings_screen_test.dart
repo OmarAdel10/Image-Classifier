@@ -810,13 +810,16 @@ void main() {
           findsOneWidget,
         );
         // The banner names the cause of the failure, so the user is not left
-        // guessing what went wrong.
+        // guessing what went wrong. The text of the exception itself stays
+        // out of the banner: it can carry internal details.
         expect(
           find.textContaining(
-            'Could not test ${Config.platformDefaultApiBaseUrl}: Exception: boom',
+            'Could not test ${Config.platformDefaultApiBaseUrl}: '
+            'an unexpected error occurred',
           ),
           findsOneWidget,
         );
+        expect(find.textContaining('boom'), findsNothing);
         // The probe finished: the button is re-enabled for another attempt.
         final probeButton = tester.widget<FilledButton>(
           _buttonWithLabel('Test Connection'),
@@ -824,6 +827,31 @@ void main() {
         expect(probeButton.onPressed, isNotNull);
       },
     );
+
+    testWidgets('a long address is shortened in the banner', (
+      WidgetTester tester,
+    ) async {
+      final mockClient = MockClient((request) async {
+        throw Exception('boom');
+      });
+      // A valid address can still be far longer than a banner can show.
+      final longUrl = 'http://${'a' * 200}.example.com:8000';
+
+      await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), longUrl);
+      await tester.tap(_buttonWithLabel('Test Connection'));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // The banner stays readable: the address is shortened. The field
+      // itself still holds what the user typed, so the assertion looks at
+      // the banner only.
+      final banner = tester.widget<Text>(find.textContaining('Could not test'));
+      expect(banner.data, contains('…'));
+      expect(banner.data, isNot(contains(longUrl)));
+    });
 
     group('unmounted while a request is in flight', () {
       testWidgets(
