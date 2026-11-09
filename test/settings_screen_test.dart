@@ -877,6 +877,24 @@ void main() {
       expect(banner.data, contains('http://example.com:8000'));
     });
 
+    testWidgets('a credential in the pinned address is not shown', (
+      WidgetTester tester,
+    ) async {
+      await tester.pumpWidget(
+        _buildSettingsScreen(
+          http.Client(),
+          compileTimeOverride: 'http://user:pass@pinned.example.com:8000',
+        ).widget,
+      );
+      await tester.pumpAndSettle();
+
+      final banner = tester.widget<Text>(
+        find.textContaining('Pinned by --dart-define'),
+      );
+      expect(banner.data, isNot(contains('user:pass')));
+      expect(banner.data, contains('http://pinned.example.com:8000'));
+    });
+
     group('unmounted while a request is in flight', () {
       testWidgets(
         'a probe that finishes after the screen is closed is ignored',
@@ -904,6 +922,32 @@ void main() {
           expect(tester.takeException(), isNull);
         },
       );
+
+      testWidgets('a probe that fails after the screen is closed is ignored', (
+        WidgetTester tester,
+      ) async {
+        final gate = Completer<void>();
+        final gatedClient = MockClient((request) async {
+          await gate.future;
+          throw Exception('boom');
+        });
+
+        await tester.pumpWidget(_buildSettingsScreen(gatedClient).widget);
+        await tester.pumpAndSettle();
+
+        await tester.tap(_buttonWithLabel('Test Connection'));
+        await tester.pump();
+
+        // The screen is closed while the probe is still running.
+        await tester.pumpWidget(const SizedBox.shrink());
+
+        gate.complete();
+        await tester.pump();
+        await tester.pump();
+
+        // The late failure must not touch the closed screen.
+        expect(tester.takeException(), isNull);
+      });
 
       testWidgets(
         'a save that finishes after the screen is closed is ignored',

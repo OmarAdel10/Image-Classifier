@@ -4,6 +4,23 @@ import 'package:provider/provider.dart';
 import 'package:image_classifier/config.dart';
 import 'package:image_classifier/services/api_client.dart';
 
+/// Shortens an address for a banner.
+///
+/// The field accepts anything the user types, so the address is stripped of
+/// control characters and shortened before it reaches a message. A banner
+/// stays readable and cannot carry a pasted payload. The credentials of an
+/// address are removed as well, so a banner never repeats a secret.
+String _displayUrl(String url) {
+  final cleaned = url
+      .replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '')
+      .replaceFirstMapped(
+        RegExp(r'^(https?://)[^/@]*@'),
+        (match) => match.group(1)!,
+      );
+  if (cleaned.length <= 120) return cleaned;
+  return '${cleaned.substring(0, 119)}…';
+}
+
 /// Screen for configuring the backend API base URL at runtime.
 ///
 /// The compile-time `--dart-define=API_BASE_URL` override always wins. When it
@@ -79,17 +96,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (error is StateError) return error.message;
     if (error is ProviderNotFoundException) return error.toString();
     return 'an unexpected error occurred';
-  }
-
-  /// Shortens an address for a banner.
-  ///
-  /// The field accepts anything the user types, so the address is stripped
-  /// of control characters and shortened before it reaches a message. A
-  /// banner stays readable and cannot carry a pasted payload.
-  static String _displayUrl(String url) {
-    final cleaned = url.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '');
-    if (cleaned.length <= 120) return cleaned;
-    return '${cleaned.substring(0, 119)}…';
   }
 
   Future<void> _testConnection() async {
@@ -185,7 +191,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       // the user instead of escaping the handler.
       apiClient = context.read<ApiClient>();
     } catch (e) {
-      if (!mounted) return;
+      // The read is synchronous, so the screen is still mounted here and the
+      // banner can be written without a guard.
       setState(() {
         _statusIsError = true;
         _statusMessage = 'Could not reset the stored URL: ${_describeError(e)}';
@@ -216,8 +223,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final override = widget.compileTimeOverride;
       _statusIsError = false;
       _statusMessage = override.isNotEmpty
-          ? 'Cleared the stored URL; --dart-define=API_BASE_URL=$override '
-                'still applies.'
+          ? 'Cleared the stored URL; --dart-define=API_BASE_URL='
+                '${_displayUrl(override)} still applies.'
           : 'Reset to default (${_displayUrl(url)})';
     });
     _controller.text = url;
@@ -362,7 +369,8 @@ class _PinnedBanner extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Pinned by --dart-define=API_BASE_URL=$compileTimeOverride. '
+              'Pinned by --dart-define=API_BASE_URL='
+              '${_displayUrl(compileTimeOverride)}. '
               'This build always uses that URL; the field below is for Test '
               'Connection only and Save is disabled.',
               style: theme.textTheme.bodyMedium?.copyWith(color: color),
