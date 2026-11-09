@@ -37,11 +37,17 @@ matching Plane work item.
 ## ERROR-BODY — _parseErrorMessage reports the raw body, not the status code
 
 - **Plane:** IC-68
-- **Location:** `lib/services/api_client.dart:276`
+- **Location:** `lib/services/api_client.dart:340`
 - **Finding:** The backend error body is shown verbatim to the user instead of the
   HTTP status code, so a proxy or HTML error page leaks through the message.
 - **Fix:** Report the response status code and keep the body only for structured
   JSON error payloads.
+- **Delivered by PR #30:** `_parseErrorMessage` now takes the status code and
+  falls back to `Request failed with status <code>`
+  (`lib/services/api_client.dart:340`); only a JSON payload with a `detail`
+  field is used as the message, so an HTML error page is no longer echoed to the
+  user. The status code of the response is the status of the `ApiException`
+  (`lib/services/api_client.dart:311`).
 
 ## CI-DEDUP — duplicated Flutter CI workflows with divergent torch cache keys
 
@@ -116,9 +122,9 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:252`,
-  `lib/services/api_client.dart:264`,
-  `lib/services/api_client.dart:269`
+- **Location:** `lib/services/api_client.dart:247`,
+  `lib/services/api_client.dart:255`,
+  `lib/services/api_client.dart:340`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -127,28 +133,26 @@ matching Plane work item.
   backend instead of the image.
 - **Fix:** Map each exception to the message that describes its real cause.
 - **Delivered in PR #30:** a missing image file is now reported as
-  `Could not read the image file: ...` (status 400) before the request is
+  `Could not read the image file.` (status 400) before the request is
   sent, a file that exists but cannot be read is reported the same way when
-  the request body is streamed (`lib/services/api_client.dart:138`), a response
+  the request body is streamed (`lib/services/api_client.dart:145`), a response
   body that cannot be read is reported as `Could not read the response from
   ...` (status 502) instead of `Connection to ... failed`
   (`lib/services/api_client.dart:153`, `lib/services/api_client.dart:202`),
   a response body that never ends is reported as a timeout (status 408)
   instead of hanging the request, and an `ArgumentError` is reported as
-  `Invalid request to ...` with a null-safe message. The remaining part of the
-  finding — the `FormatException` arm of the request builder — stays open in
-  IC-77.
-- **Still open in IC-77:** the `http.ClientException` and `IOException` arms
-  of the request builder still embed the raw exception text
-  (`lib/services/api_client.dart:252-258`, `lib/services/api_client.dart:264-268`),
-  so a TLS failure shows `HandshakeException: ...` in the user-facing message.
-  The fixed wording would be `Connection to <url> failed. Check that the
-  backend is running and reachable from this device.`
-- **Still open in IC-77:** the `on IOException` arm of the request builder is
-  effectively dead: a `SocketException` is matched by the earlier arm and
-  `http.ClientException` is not an `IOException`, so the arm can only be
-  reached by a custom client. The arm should either be removed or be given the
-  same fixed wording as the other transport arms.
+  `Invalid request to ...` with a null-safe message.
+- **Delivered in PR #30:** every transport failure now carries one status code
+  (503) and one fixed message (`lib/services/api_client.dart:247-254`,
+  `lib/services/api_client.dart:300`), so a TLS failure no longer shows
+  `HandshakeException: ...` and the backend is not blamed for a file problem.
+  The file messages carry no local path, and the `FormatException` arm
+  (`lib/services/api_client.dart:255`) uses fixed wording without the raw
+  exception text.
+- **Still open in IC-77:** the `FormatException` arm covers a
+  request-construction failure and a response-parse failure at the same time,
+  so the wording is still wrong for the first case. The two failures need two
+  messages.
 - **Note:** The port bound at `lib/config.dart:239` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
@@ -352,7 +356,7 @@ matching Plane work item.
 ## TRANSPORT-STATUS — transport failures use two different status codes
 
 - **Plane:** IC-91
-- **Location:** `lib/services/api_client.dart:247-260`
+- **Location:** `lib/services/api_client.dart:247-254`
 - **Finding:** A transport failure is reported with status `502` when the
   client raises an `http.ClientException` and with status `503` when it
   raises another `IOException`, so the same user-visible problem (the backend
@@ -360,6 +364,10 @@ matching Plane work item.
   the `ClientException` arm names the exception message, the `IOException` arm
   names the whole exception.
 - **Fix:** Map every transport failure to one status code and one message.
+- **Delivered by PR #30:** a `SocketException`, an `http.ClientException`, an
+  `HttpException` and an `IOException` all raise the same `ApiException`
+  (status 503, `lib/services/api_client.dart:300`), so one unreachable backend
+  now carries one code and one message.
 
 ## IMAGE-SIZE — the rejection message does not name the size of the file
 
@@ -421,3 +429,70 @@ matching Plane work item.
   `backend/pyproject.toml` for unused `noqa` directives.
 - **Fix:** Use the same scope in the workflow and in the local gate, so a new
   top level module cannot slip through unnoticed.
+
+## PERCENT-URL — every percent sign in the URL is rejected
+
+- **Plane:** IC-98
+- **Location:** `lib/config.dart:233`
+- **Finding:** The URL validator rejects the whole address when it contains a
+  `%` anywhere, so a legitimate percent-encoded path is refused even though
+  the rule was meant to stop an encoded host or an encoded path segment.
+- **Fix:** Reject a percent escape only where it can change the host or the
+  path of the request, and accept the rest.
+
+## PARTIAL-PURGE — a partial download survives a killed script run
+
+- **Plane:** IC-99
+- **Location:** `backend/scripts/fetch_cifar10.sh` (the download loop)
+- **Finding:** The script removes the partial archive when the last attempt of
+  a source is used up, but a run that is killed while a transfer is in flight
+  leaves the partial file behind. The next run starts the transfer with
+  `-C -`, so it resumes from the partial file of the previous run.
+- **Fix:** Remove the partial file when the script starts, or verify that a
+  resumed file belongs to the current source before it is used.
+
+## PROBE-URL — a malformed address is reported as an unreachable backend
+
+- **Plane:** IC-100
+- **Location:** `lib/services/api_client.dart:82-94` (`healthStatusCode`)
+- **Finding:** The connection probe returns no status code for a malformed base
+  URL and for an unreachable backend, so the settings screen reports the same
+  cause for both. The user cannot tell a typo from a backend that is down.
+- **Fix:** Report the malformed address and the unreachable backend as two
+  different causes.
+
+## DISPOSE-NOOP — dispose() does nothing
+
+- **Plane:** IC-101
+- **Location:** `lib/services/api_client.dart:228`
+- **Finding:** `dispose()` is a no-op because the client never owns the
+  `http.Client`. The method is part of the public contract and suggests a
+  cleanup that never happens.
+- **Fix:** Remove the method, or make it close a client that the instance owns.
+
+## TRAILING-SLASH — the normalized address drops every trailing slash
+
+- **Plane:** IC-102
+- **Location:** `lib/config.dart:51` (`normalizeApiBaseUrl`)
+- **Finding:** The normalization removes all trailing slashes, so an address
+  that names a path (`http://host:8000/api/`) loses it and the request goes to
+  a different route.
+- **Fix:** Remove only the slashes that the request builder adds itself, or
+  keep the path of the address.
+
+## SETTINGS-ERROR-TEXT — the settings banner echoed the raw error and the whole address
+
+- **Plane:** IC-103
+- **Location:** `lib/screens/settings_screen.dart:78` (`_describeError`),
+  `lib/screens/settings_screen.dart:89` (`_displayUrl`)
+- **Finding:** The banner described an unknown failure with
+  `error.toString()`, so a raw Dart error object reached the user, and it
+  echoed the typed address without a limit, so a long or control-character
+  address could push the message out of the banner.
+- **Fix:** Describe the failure from an allow-list of known causes and shorten
+  the address that the banner shows.
+- **Delivered by PR #30:** `_describeError` now answers from an allow-list (a
+  `StateError` shows its message, a missing provider names the provider, every
+  other failure reads `an unexpected error occurred`), and `_displayUrl`
+  removes control characters and shortens the address to 119 characters plus
+  an ellipsis.
