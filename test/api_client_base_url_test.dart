@@ -502,10 +502,12 @@ void main() {
                     (e) => e.message,
                     'message',
                     allOf(
-                      startsWith(
-                        'Invalid request to http://arg-error.example.com:8000:',
+                      equals(
+                        'Invalid request to http://arg-error.example.com:8000.',
                       ),
-                      contains('bad address'),
+                      // The raw exception text is dropped: a custom client can
+                      // carry any text in an ArgumentError.
+                      isNot(contains('bad address')),
                       // The address is validated before the request, so the
                       // message must not blame the backend address.
                       isNot(contains('Invalid backend address')),
@@ -537,8 +539,8 @@ void main() {
                 .having(
                   (e) => e.message,
                   'message',
-                  startsWith(
-                    'Invalid request to http://arg-error.example.com:8000:',
+                  equals(
+                    'Invalid request to http://arg-error.example.com:8000.',
                   ),
                 )
                 .having((e) => e.statusCode, 'statusCode', 502),
@@ -547,7 +549,7 @@ void main() {
       });
 
       test(
-        'an ArgumentError without a message is reported without null',
+        'an ArgumentError without a message uses the same fixed wording',
         () async {
           final mockClient = MockClient((request) async {
             throw ArgumentError();
@@ -565,7 +567,9 @@ void main() {
                     (e) => e.message,
                     'message',
                     allOf(
-                      contains('invalid argument'),
+                      equals(
+                        'Invalid request to http://arg-error.example.com:8000.',
+                      ),
                       isNot(contains('null')),
                     ),
                   )

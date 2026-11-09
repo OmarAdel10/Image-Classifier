@@ -10,6 +10,13 @@ import 'package:image_classifier/models/model_info.dart';
 import 'package:image_classifier/models/prediction.dart';
 
 /// Custom exception for API errors.
+///
+/// The status code names the failure class. When the backend answered, the
+/// status code of the response is kept. When the failure happened before a
+/// response arrived, a fixed code names the class instead: 408 for a request
+/// that never reached an answer, 400 for a local file fault, 502 for a
+/// response that could not be read or parsed, and 503 for a transport
+/// failure.
 class ApiException implements Exception {
   const ApiException({required this.message, required this.statusCode});
 
@@ -113,6 +120,10 @@ class ApiClient {
           streamedResponse,
           _remainingBudget(stopwatch),
         );
+      } on TimeoutException {
+        // The response arrived, so the body was not read in time. That is a
+        // response problem, not a request that never reached an answer.
+        throw _responseReadFailure(url);
       } on http.ClientException {
         throw _responseReadFailure(url);
       } on SocketException {
@@ -141,7 +152,9 @@ class ApiClient {
       upload = await http.MultipartFile.fromPath('file', imageFile.path);
     } on IOException {
       // The file cannot be read. The message names the problem only: the
-      // local path stays out of the text that reaches the screen.
+      // local path stays out of the text that reaches the screen. The
+      // request was never sent, so the status names the local input fault
+      // (400) instead of a status of the backend.
       throw ApiException(
         message: 'Could not read the image file.',
         statusCode: 400,
@@ -159,6 +172,8 @@ class ApiClient {
         // The file passed the size check but could not be read while the
         // body was streamed. That is a problem with the local file, not with
         // the connection to the backend. The path stays out of the message.
+        // The request was never delivered, so the status names the local
+        // input fault (400) instead of a status of the backend.
         throw ApiException(
           message: 'Could not read the image file.',
           statusCode: 400,
@@ -172,6 +187,10 @@ class ApiClient {
           streamedResponse,
           _remainingBudget(stopwatch),
         );
+      } on TimeoutException {
+        // The response arrived, so the body was not read in time. That is a
+        // response problem, not a request that never reached an answer.
+        throw _responseReadFailure(url);
       } on http.ClientException {
         // The body was cut short after the status line arrived. The backend
         // answered, so this is not a connection problem.
@@ -221,7 +240,9 @@ class ApiClient {
       } on FileSystemException {
         // A custom client can read the request body from the file system.
         // The failure is about the local file, not about the connection to
-        // the backend, so the backend is not blamed for it.
+        // the backend, so the backend is not blamed for it. The request was
+        // never delivered, so the status names the local input fault (400)
+        // instead of a status of the backend.
         throw ApiException(
           message: 'Could not read the image file.',
           statusCode: 400,
@@ -235,6 +256,10 @@ class ApiClient {
           streamedResponse,
           _remainingBudget(stopwatch),
         );
+      } on TimeoutException {
+        // The response arrived, so the body was not read in time. That is a
+        // response problem, not a request that never reached an answer.
+        throw _responseReadFailure(url);
       } on http.ClientException {
         // The body was cut short after the status line arrived. The backend
         // answered, so this is not a connection problem.
@@ -300,15 +325,11 @@ class ApiClient {
             'Is the backend the image classifier API?',
         statusCode: 502,
       );
-    } on ArgumentError catch (e) {
+    } on ArgumentError {
       // The address itself is validated before the request, so an
-      // ArgumentError here comes from the request, not from the URL.
-      throw ApiException(
-        message:
-            'Invalid request to $url: '
-            '${e.message?.toString() ?? 'invalid argument'}',
-        statusCode: 502,
-      );
+      // ArgumentError here comes from the request, not from the URL. The raw
+      // exception text is dropped: a custom client can carry any text in it.
+      throw ApiException(message: 'Invalid request to $url.', statusCode: 502);
     }
   }
 
@@ -375,7 +396,13 @@ class ApiClient {
       return await completer.future;
     } finally {
       timer.cancel();
-      await subscription.cancel();
+      try {
+        await subscription.cancel();
+      } catch (_) {
+        // A failure to release the subscription must not replace the failure
+        // that ended the read: the user has to see why the response could
+        // not be read.
+      }
     }
   }
 

@@ -1008,8 +1008,8 @@ void main() {
     });
 
     group('a response that never ends', () {
-      test('a body that stalls after a slow send is reported as a timeout '
-          'within the request budget', () async {
+      test('a body that stalls after a slow send is reported as a response '
+          'problem within the request budget', () async {
         final body = StreamController<List<int>>();
         addTearDown(body.close);
         final apiClient = ApiClient(
@@ -1025,8 +1025,12 @@ void main() {
           apiClient.getModelInfo(),
           throwsA(
             isA<ApiException>()
-                .having((e) => e.statusCode, 'statusCode', 408)
-                .having((e) => e.message, 'message', contains('timed out')),
+                .having((e) => e.statusCode, 'statusCode', 502)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('Could not read the response from'),
+                ),
           ),
         );
         stopwatch.stop();
@@ -1043,7 +1047,7 @@ void main() {
               'the body subscription must be released when the read times out',
         );
       });
-      test('a stalled response body is reported as a timeout', () async {
+      test('a stalled response body is reported as a response problem', () async {
         final body = StreamController<List<int>>();
         addTearDown(body.close);
         final file = _createTempImageFile();
@@ -1056,12 +1060,12 @@ void main() {
           apiClient.predict(file),
           throwsA(
             isA<ApiException>()
-                .having((e) => e.statusCode, 'statusCode', 408)
+                .having((e) => e.statusCode, 'statusCode', 502)
                 .having(
                   (e) => e.message,
                   'message',
                   allOf(
-                    contains('timed out'),
+                    contains('Could not read the response from'),
                     isNot(contains('Connection to')),
                   ),
                 ),
@@ -1076,7 +1080,7 @@ void main() {
         );
       });
 
-      test('a stalled response body is reported as a timeout for bytes too', () async {
+      test('a stalled response body is reported as a response problem for bytes too', () async {
         final body = StreamController<List<int>>();
         addTearDown(body.close);
         final apiClient = ApiClient(
@@ -1088,12 +1092,12 @@ void main() {
           apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
           throwsA(
             isA<ApiException>()
-                .having((e) => e.statusCode, 'statusCode', 408)
+                .having((e) => e.statusCode, 'statusCode', 502)
                 .having(
                   (e) => e.message,
                   'message',
                   allOf(
-                    contains('timed out'),
+                    contains('Could not read the response from'),
                     isNot(contains('Connection to')),
                   ),
                 ),
@@ -1108,7 +1112,7 @@ void main() {
         );
       });
 
-      test('a stalled model info body is reported as a timeout', () async {
+      test('a stalled model info body is reported as a response problem', () async {
         final body = StreamController<List<int>>();
         addTearDown(body.close);
         final apiClient = ApiClient(
@@ -1120,8 +1124,12 @@ void main() {
           apiClient.getModelInfo(),
           throwsA(
             isA<ApiException>()
-                .having((e) => e.statusCode, 'statusCode', 408)
-                .having((e) => e.message, 'message', contains('timed out')),
+                .having((e) => e.statusCode, 'statusCode', 502)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('Could not read the response from'),
+                ),
           ),
         );
 
@@ -1130,6 +1138,79 @@ void main() {
           isFalse,
           reason:
               'the body subscription must be released when the read times out',
+        );
+      });
+    });
+
+    group('a request with no budget left', () {
+      test(
+        'a spent budget fails the body read without reading the body',
+        () async {
+          // A broadcast controller is closed without a listener, so the
+          // teardown cannot hang when the body is never subscribed.
+          final body = StreamController<List<int>>.broadcast();
+          addTearDown(body.close);
+          var listened = false;
+          body.onListen = () {
+            listened = true;
+          };
+          // A zero budget leaves nothing for the body read: the response
+          // arrived, but the request budget is already spent.
+          final apiClient = ApiClient(
+            client: _StalledBodyClient(body),
+            timeout: Duration.zero,
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.statusCode, 'statusCode', 502)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('Could not read the response from'),
+                  ),
+            ),
+          );
+
+          expect(
+            listened,
+            isFalse,
+            reason: 'a spent budget must not subscribe to the body at all',
+          );
+          expect(
+            body.hasListener,
+            isFalse,
+            reason: 'a spent budget must not leave the body subscribed',
+          );
+        },
+      );
+
+      test('a body subscription that cannot be released does not hide the '
+          'original failure', () async {
+        final body = StreamController<List<int>>(
+          onCancel: () async {
+            throw StateError('the subscription cannot be released');
+          },
+        );
+        addTearDown(body.close);
+        final apiClient = ApiClient(
+          client: _StalledBodyClient(body),
+          timeout: const Duration(milliseconds: 50),
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 502)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('Could not read the response from'),
+                ),
+          ),
         );
       });
     });
