@@ -100,9 +100,22 @@ class ApiClient {
   Future<ModelInfo> getModelInfo() async {
     final url = await baseUrl;
     return _handleRequest(url, () async {
-      final response = await client
-          .get(Uri.parse('$url/model-info'))
+      // The body is read through the bounded reader, so a model info response
+      // that is cut short or never ends is reported the same way a prediction
+      // response is: the backend answered, so the transfer failed after that.
+      final streamedResponse = await client
+          .send(http.Request('GET', Uri.parse('$url/model-info')))
           .timeout(_timeout);
+      final http.Response response;
+      try {
+        response = await _readResponseBody(streamedResponse);
+      } on http.ClientException {
+        throw _responseReadFailure(url);
+      } on SocketException {
+        throw _responseReadFailure(url);
+      } on FileSystemException {
+        throw _responseReadFailure(url);
+      }
 
       if (response.statusCode == 200) {
         return ModelInfo.fromJson(_parseJsonMap(response.body));
@@ -150,8 +163,7 @@ class ApiClient {
       try {
         // The body read is bounded too: a backend that sends the status code
         // and then stalls would otherwise keep the request pending forever.
-        response = await http.Response.fromStream(streamedResponse)
-            .timeout(_timeout);
+        response = await _readResponseBody(streamedResponse);
       } on http.ClientException {
         // The body was cut short after the status line arrived. The backend
         // answered, so this is not a connection problem.
@@ -194,13 +206,23 @@ class ApiClient {
           http.MultipartFile.fromBytes('file', bytes, filename: fileName),
         );
 
-      final streamedResponse = await client.send(request).timeout(_timeout);
+      final http.StreamedResponse streamedResponse;
+      try {
+        streamedResponse = await client.send(request).timeout(_timeout);
+      } on FileSystemException {
+        // A custom client can read the request body from the file system.
+        // The failure is about the local file, not about the connection to
+        // the backend, so the backend is not blamed for it.
+        throw ApiException(
+          message: 'Could not read the image file.',
+          statusCode: 400,
+        );
+      }
       final http.Response response;
       try {
         // The body read is bounded too: a backend that sends the status code
         // and then stalls would otherwise keep the request pending forever.
-        response = await http.Response.fromStream(streamedResponse)
-            .timeout(_timeout);
+        response = await _readResponseBody(streamedResponse);
       } on http.ClientException {
         // The body was cut short after the status line arrived. The backend
         // answered, so this is not a connection problem.
@@ -275,6 +297,57 @@ class ApiClient {
             '${e.message?.toString() ?? 'invalid argument'}',
         statusCode: 502,
       );
+    }
+  }
+
+  /// Reads the body of [streamedResponse] within the request budget.
+  ///
+  /// The read is bounded and the subscription is released when the deadline
+  /// expires. A future timeout alone is not enough: it gives up on the
+  /// response but leaves the body stream subscribed, so the transfer would
+  /// keep running and the connection would stay open after the request was
+  /// abandoned.
+  Future<http.Response> _readResponseBody(
+    http.StreamedResponse streamedResponse,
+  ) async {
+    final completer = Completer<http.Response>();
+    final buffer = BytesBuilder(copy: false);
+    final timer = Timer(_timeout, () {
+      if (!completer.isCompleted) {
+        completer.completeError(
+          TimeoutException('The response body was not read in time.', _timeout),
+        );
+      }
+    });
+    final subscription = streamedResponse.stream.listen(
+      buffer.add,
+      onError: (Object error, StackTrace stackTrace) {
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        if (!completer.isCompleted) {
+          completer.complete(
+            http.Response.bytes(
+              buffer.takeBytes(),
+              streamedResponse.statusCode,
+              headers: streamedResponse.headers,
+              request: streamedResponse.request,
+              reasonPhrase: streamedResponse.reasonPhrase,
+              isRedirect: streamedResponse.isRedirect,
+              persistentConnection: streamedResponse.persistentConnection,
+            ),
+          );
+        }
+      },
+      cancelOnError: true,
+    );
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      await subscription.cancel();
     }
   }
 

@@ -92,6 +92,20 @@ class _StalledBodyClient extends http.BaseClient {
   }
 }
 
+/// A client whose send fails with a file system fault.
+///
+/// A custom client can read the request body from the file system, so the
+/// fault can happen while the request is sent.
+class _FileFaultOnSendClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    throw FileSystemException(
+      'the upload file could not be read',
+      '/tmp/image_classifier_upload',
+    );
+  }
+}
+
 void main() {
   group('ApiClient', () {
     late MockClient mockClient;
@@ -813,6 +827,86 @@ void main() {
           );
         },
       );
+      test('a truncated model info body is not a connection error', () async {
+        final apiClient = ApiClient(
+          client: _BrokenBodyClient(
+            http.ClientException('Connection closed while receiving data.'),
+          ),
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the response from'),
+                    isNot(contains('Cannot reach')),
+                    isNot(contains('Connection closed while receiving data')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 502),
+          ),
+        );
+      });
+
+      test(
+        'a socket error while the bytes are read is not a connection error',
+        () async {
+          final apiClient = ApiClient(
+            client: _BrokenBodyClient(
+              SocketException('Connection reset by peer'),
+            ),
+          );
+
+          await expectLater(
+            apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+            throwsA(
+              isA<ApiException>()
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    allOf(
+                      contains('Could not read the response from'),
+                      isNot(contains('Cannot reach')),
+                      isNot(contains('Connection reset by peer')),
+                    ),
+                  )
+                  .having((e) => e.statusCode, 'statusCode', 502),
+            ),
+          );
+        },
+      );
+
+      test('a response body of the byte upload that cannot be read is not a '
+          'connection error', () async {
+        final apiClient = ApiClient(
+          client: _BrokenBodyClient(
+            FileSystemException(
+              'the response body could not be read',
+              '/tmp/image_classifier_response',
+            ),
+          ),
+        );
+
+        await expectLater(
+          apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the response from'),
+                    isNot(contains('Cannot reach')),
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 502),
+          ),
+        );
+      });
     });
 
     group('a response that never ends', () {
@@ -840,30 +934,88 @@ void main() {
                 ),
           ),
         );
+
+        expect(
+          body.hasListener,
+          isFalse,
+          reason:
+              'the body subscription must be released when the read times out',
+        );
       });
 
+      test('a stalled response body is reported as a timeout for bytes too', () async {
+        final body = StreamController<List<int>>();
+        addTearDown(body.close);
+        final apiClient = ApiClient(
+          client: _StalledBodyClient(body),
+          timeout: const Duration(milliseconds: 50),
+        );
+
+        await expectLater(
+          apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 408)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('timed out'),
+                    isNot(contains('Connection to')),
+                  ),
+                ),
+          ),
+        );
+
+        expect(
+          body.hasListener,
+          isFalse,
+          reason:
+              'the body subscription must be released when the read times out',
+        );
+      });
+
+      test('a stalled model info body is reported as a timeout', () async {
+        final body = StreamController<List<int>>();
+        addTearDown(body.close);
+        final apiClient = ApiClient(
+          client: _StalledBodyClient(body),
+          timeout: const Duration(milliseconds: 50),
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 408)
+                .having((e) => e.message, 'message', contains('timed out')),
+          ),
+        );
+
+        expect(
+          body.hasListener,
+          isFalse,
+          reason:
+              'the body subscription must be released when the read times out',
+        );
+      });
+    });
+
+    group('a file fault while the request is sent', () {
       test(
-        'a stalled response body is reported as a timeout for bytes too',
+        'a file fault while the bytes are sent is reported as a file problem',
         () async {
-          final body = StreamController<List<int>>();
-          addTearDown(body.close);
-          final apiClient = ApiClient(
-            client: _StalledBodyClient(body),
-            timeout: const Duration(milliseconds: 50),
-          );
+          final apiClient = ApiClient(client: _FileFaultOnSendClient());
 
           await expectLater(
             apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
             throwsA(
               isA<ApiException>()
-                  .having((e) => e.statusCode, 'statusCode', 408)
+                  .having((e) => e.statusCode, 'statusCode', 400)
                   .having(
                     (e) => e.message,
                     'message',
-                    allOf(
-                      contains('timed out'),
-                      isNot(contains('Connection to')),
-                    ),
+                    'Could not read the image file.',
                   ),
             ),
           );
