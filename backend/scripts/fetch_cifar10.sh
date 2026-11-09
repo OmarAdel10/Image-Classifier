@@ -56,7 +56,7 @@ fi
 # forge a workflow command, so the line breaks are removed before the value
 # is reported.
 log_safe() {
-  printf '%s' "$1" | tr -d '\r\n'
+  printf '%s' "$1" | tr -d '\000-\037\177'
 }
 
 if ! [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
@@ -92,6 +92,10 @@ verify() {
     && echo "$SHA256  cifar-10-python.tar.gz" | sha256sum -c --status
 }
 
+# The last failure is reported in the error annotation, so a triage does not
+# have to guess which source failed and why.
+last_failure=''
+
 if verify; then
   echo "CIFAR-10 archive verified from the restored cache."
 else
@@ -111,13 +115,15 @@ else
       # TERM signal, so an attempt cannot outlive its budget. --proto and
       # --proto-redir keep the transfer on HTTPS, so a redirect cannot move
       # it into another scheme the curl build accepts by default.
+      status=0
       timeout --kill-after=30 "$TIMEOUT" curl -fL -C - \
         --proto '=https' --proto-redir '=https' \
         --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
-        -o cifar-10-python.tar.gz "$url" || true
+        -o cifar-10-python.tar.gz "$url" || status=$?
       if verify; then
         break 2
       fi
+      last_failure="${url} (curl exit ${status})"
       if [ "$attempt" -eq "$ATTEMPTS" ]; then
         # The source is exhausted: drop the partial so the next source
         # starts from byte 0 instead of splicing two byte streams.
@@ -128,7 +134,11 @@ else
 fi
 
 if ! verify; then
-  echo "::error::CIFAR-10 archive could not be downloaded and verified."
+  if [ -n "$last_failure" ]; then
+    echo "::error::CIFAR-10 archive could not be downloaded and verified. Last failure: $(log_safe "$last_failure")."
+  else
+    echo "::error::CIFAR-10 archive could not be downloaded and verified."
+  fi
   exit 1
 fi
 

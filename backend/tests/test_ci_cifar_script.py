@@ -657,6 +657,48 @@ def test_a_rejected_digest_cannot_forge_a_workflow_annotation(tmp_path: Path) ->
         assert not line.startswith("::error::injected"), f"a forged annotation was logged: {line}"
 
 
+def test_the_failure_annotation_names_the_source_and_the_reason(
+    tmp_path: Path,
+) -> None:
+    """A failed download reports which source failed and why.
+
+    The annotation is the only thing a triage sees, so it has to name the
+    source and the exit status of the transfer.
+    """
+    source = "https://example.test/archive.tar.gz"
+
+    process, _ = _run_script(
+        tmp_path,
+        [source],
+        fail_substring="example.test",
+    )
+
+    assert process.returncode == 1, "the failed download was accepted"
+    annotations = [line for line in process.stdout.splitlines() if line.startswith("::error::")]
+    assert len(annotations) == 1, f"the failure spans several lines: {process.stdout}"
+    assert source in annotations[0], f"the source is missing: {annotations[0]}"
+    assert "curl exit 22" in annotations[0], f"the reason is missing: {annotations[0]}"
+
+
+def test_a_rejected_digest_cannot_carry_control_characters_into_the_log(
+    tmp_path: Path,
+) -> None:
+    """A rejected digest is reported without control characters.
+
+    The rejected value is written into the error annotation, so a value that
+    carries a control character could rewrite the line in the CI log.
+    """
+    process, _ = _run_script(
+        tmp_path,
+        ["https://example.test/archive.tar.gz"],
+        md5="not-a-digest\x1b[31m",
+    )
+
+    assert process.returncode == 1, "the rejected digest was accepted"
+    for line in process.stdout.splitlines():
+        assert "\x1b" not in line, f"a control character reached the log: {line!r}"
+
+
 def test_the_workflow_pins_the_expected_digests() -> None:
     """The digests CI accepts are pinned in the workflow as well.
 
