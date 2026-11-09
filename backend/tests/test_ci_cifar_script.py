@@ -1211,6 +1211,10 @@ def test_invalid_digest_overrides_are_rejected(tmp_path: Path) -> None:
             "CIFAR10_SHA256",
             "6d958be074577803d12ecdefd02955f39262c83c16fe9348329d7fe0b5c001ce  other-file",
         ),
+        (
+            "CIFAR10_SHA256",
+            "6D958BE074577803D12ECDEFD02955F39262C83C16FE9348329D7FE0B5C001CE",
+        ),
     ):
         env = dict(os.environ)
         env[name] = value
@@ -1282,5 +1286,25 @@ def test_the_logged_source_cannot_carry_control_characters(tmp_path: Path) -> No
     ]
     assert logged, "the source was not logged"
     for line in logged:
+        assert "\x01" not in line, f"a control character reached the log: {line!r}"
+        assert "\x1b" not in line, f"a control character reached the log: {line!r}"
+
+
+def test_the_failure_annotation_cannot_carry_control_characters(tmp_path: Path) -> None:
+    """The failure annotation must not carry a control character into the log.
+
+    The annotation names the source that failed, so a source with a control
+    character would put it into the CI log as well.
+    """
+    source = "https://example.test/archive\x01\x1b"
+    process, _ = _run_script(
+        tmp_path,
+        [source],
+        fail_substring="example.test",
+    )
+
+    annotations = [line for line in process.stdout.splitlines() if "Last failure:" in line]
+    assert annotations, "the failure was not annotated"
+    for line in annotations:
         assert "\x01" not in line, f"a control character reached the log: {line!r}"
         assert "\x1b" not in line, f"a control character reached the log: {line!r}"
