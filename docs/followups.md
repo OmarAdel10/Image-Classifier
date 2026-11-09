@@ -139,9 +139,11 @@ matching Plane work item.
   body that cannot be read is reported as `Could not read the response from
   ...` (status 502) instead of `Connection to ... failed`
   (`lib/services/api_client.dart:153`, `lib/services/api_client.dart:202`),
-  a response body that never ends is reported as a timeout (status 408)
-  instead of hanging the request, and an `ArgumentError` is reported as
-  `Invalid request to ...` with a null-safe message.
+  a response body that never ends is reported as a response problem (status
+  502, `Could not read the response from ...`) instead of hanging the request
+  or blaming the backend, and an `ArgumentError` is reported as
+  `Invalid request to ...` with a null-safe message that carries no raw
+  argument text.
 - **Delivered in PR #30:** every transport failure now carries one status code
   (503) and one fixed message (`lib/services/api_client.dart:247-254`,
   `lib/services/api_client.dart:300`), so a TLS failure no longer shows
@@ -592,3 +594,14 @@ matching Plane work item.
   image service, and the contract suite never runs the real tool.
 - **Fix:** Add a status field to the register, narrow the test seam and
   exercise the real binary in the contract suite.
+
+## REDIRECT-HOST-ALLOWLIST — the download follows any HTTPS redirect host
+
+- **Plane:** IC-112
+- **Location:** `backend/scripts/fetch_cifar10.sh:124`
+- **Finding:** The round 26 review (Info severity) found that the download
+  runs `curl -fL` and pins only the scheme (`--proto-redir '=https'`), so a
+  redirect may send the transfer to any HTTPS host. The pinned md5 and sha256
+  gate keeps the content safe, so the exposure is availability only.
+- **Fix:** Resolve the redirect chain first and allow only the known mirror
+  hosts, then fetch the archive from an allowed host.
