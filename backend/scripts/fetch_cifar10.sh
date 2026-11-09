@@ -52,13 +52,20 @@ if [[ -z "${URLS//[[:space:]]/}" ]]; then
   URLS="$DEFAULT_URLS"
 fi
 
+# A rejected value is written to the CI log. A line break in the value could
+# forge a workflow command, so the line breaks are removed before the value
+# is reported.
+log_safe() {
+  printf '%s' "$1" | tr -d '\r\n'
+}
+
 if ! [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "::error::CIFAR10_ATTEMPTS must be a positive integer, got '$ATTEMPTS'."
+  echo "::error::CIFAR10_ATTEMPTS must be a positive integer, got '$(log_safe "$ATTEMPTS")'."
   exit 1
 fi
 
 if ! [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
-  echo "::error::CIFAR10_TIMEOUT must be a positive integer, got '$TIMEOUT'."
+  echo "::error::CIFAR10_TIMEOUT must be a positive integer, got '$(log_safe "$TIMEOUT")'."
   exit 1
 fi
 
@@ -67,12 +74,12 @@ fi
 # that file satisfy the check. Only a lowercase hex digest is accepted,
 # which is the form the checksum tools read.
 if ! [[ "$MD5" =~ ^[0-9a-f]{32}$ ]]; then
-  echo "::error::CIFAR10_MD5 must be a 32 character hex digest, got '$MD5'."
+  echo "::error::CIFAR10_MD5 must be a 32 character hex digest, got '$(log_safe "$MD5")'."
   exit 1
 fi
 
 if ! [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "::error::CIFAR10_SHA256 must be a 64 character hex digest, got '$SHA256'."
+  echo "::error::CIFAR10_SHA256 must be a 64 character hex digest, got '$(log_safe "$SHA256")'."
   exit 1
 fi
 
@@ -92,10 +99,11 @@ else
   while IFS= read -r url; do
     # A blank or whitespace-only line is not a source.
     [[ -n "${url//[[:space:]]/}" ]] || continue
-    # The source is written to the CI log, so the workflow command syntax is
-    # removed from the logged copy. The download itself still uses the
-    # original source.
-    echo "Downloading CIFAR-10 from ${url//::/}"
+    # The source is written to the CI log verbatim. The source list is read
+    # line by line, so a source can never contain a line break, and the fixed
+    # prefix keeps the logged line from starting with the workflow command
+    # syntax.
+    echo "Downloading CIFAR-10 from $url"
     for attempt in $(seq 1 "$ATTEMPTS"); do
       # No --retry: an automatic retry of a resumed transfer can re-send
       # bytes and splice the file. The attempt loop above retries with a

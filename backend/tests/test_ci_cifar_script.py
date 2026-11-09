@@ -610,16 +610,19 @@ def test_the_pytest_step_reads_the_dataset_from_the_cache_directory() -> None:
         ), f"{name} reads the dataset from another directory"
 
 
-def test_the_logged_source_cannot_carry_a_workflow_command(tmp_path: Path) -> None:
-    """The source is written to the CI log, so it cannot smuggle a command.
+def test_the_logged_source_is_verbatim_and_cannot_start_a_workflow_command(
+    tmp_path: Path,
+) -> None:
+    """The source is written to the CI log as it is.
 
     GitHub Actions reads a line that starts with '::' as a workflow command.
-    The source list comes from the environment, so the logged copy has to be
-    stripped of that marker.
+    The log line starts with a fixed text, so the source can never begin a
+    line, and the source itself stays readable instead of being rewritten.
     """
+    source = "https://example.test/::error::injected"
     process, _ = _run_script(
         tmp_path,
-        ["https://example.test/::error::injected"],
+        [source],
         fail_substring="example.test",
     )
 
@@ -628,7 +631,30 @@ def test_the_logged_source_cannot_carry_a_workflow_command(tmp_path: Path) -> No
     ]
     assert logged, "the source was not logged"
     for line in logged:
-        assert "::" not in line, f"the logged source carries a workflow command: {line}"
+        assert (
+            line == f"Downloading CIFAR-10 from {source}"
+        ), f"the logged source was rewritten: {line}"
+        assert not line.startswith("::"), f"the logged line starts a workflow command: {line}"
+
+
+def test_a_rejected_digest_cannot_forge_a_workflow_annotation(tmp_path: Path) -> None:
+    """A rejected digest is reported on a single line.
+
+    The rejected value is written into the error annotation, so a value that
+    carries a newline could add a second line that starts a workflow command.
+    """
+    process, _ = _run_script(
+        tmp_path,
+        ["https://example.test/archive.tar.gz"],
+        md5="not-a-digest\n::error::injected",
+    )
+
+    assert process.returncode == 1, "the rejected digest was accepted"
+    annotations = [line for line in process.stdout.splitlines() if line.startswith("::error::")]
+    assert len(annotations) == 1, f"the rejection spans several lines: {process.stdout}"
+    assert "not-a-digest" in annotations[0], f"the rejected value is missing: {annotations[0]}"
+    for line in process.stdout.splitlines():
+        assert not line.startswith("::error::injected"), f"a forged annotation was logged: {line}"
 
 
 def test_the_workflow_pins_the_expected_digests() -> None:
