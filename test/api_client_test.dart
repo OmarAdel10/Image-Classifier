@@ -622,10 +622,15 @@ void main() {
                   (e) => e.message,
                   'message',
                   allOf(
-                    contains('Could not read the image file'),
+                    // The message names the reason, not only the problem.
+                    matches(RegExp(r'^Could not read the image file: .+$')),
                     // A file that cannot be read is not a connection problem.
                     isNot(contains('Connection to')),
                     isNot(contains('Cannot reach')),
+                    // The local path of the rejected file stays out of the
+                    // message that reaches the screen.
+                    isNot(contains(file.path)),
+                    isNot(contains(blocker.path)),
                   ),
                 )
                 .having((e) => e.statusCode, 'statusCode', 400),
@@ -648,8 +653,11 @@ void main() {
                     (e) => e.message,
                     'message',
                     allOf(
-                      contains('Could not read the image file'),
+                      matches(RegExp(r'^Could not read the image file: .+$')),
                       isNot(contains('Connection to')),
+                      // The local path of the removed file stays out of the
+                      // message that reaches the screen.
+                      isNot(contains(file.path)),
                     ),
                   )
                   .having((e) => e.statusCode, 'statusCode', 400),
@@ -672,7 +680,7 @@ void main() {
                   (e) => e.message,
                   'message',
                   allOf(
-                    contains('Could not read the image file'),
+                    matches(RegExp(r'^Could not read the image file: .+$')),
                     isNot(contains('Connection to')),
                   ),
                 )

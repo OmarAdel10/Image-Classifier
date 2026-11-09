@@ -173,6 +173,56 @@ void main() {
       );
     });
 
+    test('the custom limit drives the input size check', () async {
+      final file = _writeTempFile('small.png', _pngBytes(4, 4));
+
+      await expectLater(
+        service.validateAndCompress(file, maxBytes: 8),
+        throwsA(
+          isA<ImageValidationException>().having(
+            (e) => e.message,
+            'message',
+            'the file is larger than the 8 byte limit',
+          ),
+        ),
+      );
+    });
+
+    test(
+      'a limit equal to the file size does not trip the size check',
+      () async {
+        // The bytes are not an image, so the rejection has to come from the
+        // format check and not from the size check.
+        final file = _writeTempFile('broken.png', [1, 2, 3, 4, 5, 6, 7, 8]);
+
+        await expectLater(
+          service.validateAndCompress(file, maxBytes: file.lengthSync()),
+          throwsA(
+            isA<ImageValidationException>().having(
+              (e) => e.message,
+              'message',
+              'the file is not a valid PNG or JPEG image',
+            ),
+          ),
+        );
+      },
+    );
+
+    test('a limit of zero rejects every file', () async {
+      final file = _writeTempFile('small.png', _pngBytes(4, 4));
+
+      await expectLater(
+        service.validateAndCompress(file, maxBytes: 0),
+        throwsA(
+          isA<ImageValidationException>().having(
+            (e) => e.message,
+            'message',
+            'the file is larger than the 0 byte limit',
+          ),
+        ),
+      );
+    });
+
     test('writes the result into a temporary JPEG file', () async {
       final file = _writeTempFile('image.png', _pngBytes(4, 4));
 

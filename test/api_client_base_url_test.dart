@@ -498,12 +498,17 @@ void main() {
                     (e) => e.message,
                     'message',
                     allOf(
-                      contains('http://arg-error.example.com:8000'),
+                      startsWith(
+                        'Invalid request to http://arg-error.example.com:8000:',
+                      ),
                       contains('bad address'),
                       // The address is validated before the request, so the
                       // message must not blame the backend address.
                       isNot(contains('Invalid backend address')),
                       isNot(contains('null')),
+                      // The request is at fault, not the transport.
+                      isNot(contains('Cannot reach')),
+                      isNot(contains('Connection to')),
                     ),
                   )
                   .having((e) => e.statusCode, 'statusCode', 502),
@@ -511,6 +516,31 @@ void main() {
           );
         },
       );
+
+      test('the same wording is used when a request cannot be built', () async {
+        final mockClient = MockClient((request) async {
+          throw ArgumentError('bad address');
+        });
+        final apiClient = ApiClient(
+          client: mockClient,
+          baseUrl: 'http://arg-error.example.com:8000',
+        );
+
+        await expectLater(
+          apiClient.predictBytes(Uint8List.fromList([0x00]), 'test.png'),
+          throwsA(
+            isA<ApiException>()
+                .having(
+                  (e) => e.message,
+                  'message',
+                  startsWith(
+                    'Invalid request to http://arg-error.example.com:8000:',
+                  ),
+                )
+                .having((e) => e.statusCode, 'statusCode', 502),
+          ),
+        );
+      });
 
       test(
         'an ArgumentError without a message is reported without null',

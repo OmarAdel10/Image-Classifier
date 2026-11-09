@@ -251,10 +251,45 @@ void main() {
 
       await _tapDropZoneAndSettle(tester);
 
-      expect(find.textContaining('Invalid image:'), findsOneWidget);
+      // The fallback text is pinned exactly: a wrong sentence would still
+      // satisfy the negative assertions below.
+      expect(
+        find.text('Invalid image: the selected file could not be read.'),
+        findsOneWidget,
+      );
       expect(find.textContaining('Bad state:'), findsNothing);
       expect(find.textContaining('bad image'), findsNothing);
       expect(find.textContaining('StateError'), findsNothing);
+    });
+
+    testWidgets('names the same reason for any other image failure', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any)).thenThrow(Exception('boom'));
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: MockClient((request) async => http.Response('{}', 200)),
+          imageService: imageService,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      expect(
+        find.text('Invalid image: the selected file could not be read.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('boom'), findsNothing);
+      expect(find.textContaining('Exception'), findsNothing);
     });
 
     testWidgets('shows the reason why an image was rejected', (
