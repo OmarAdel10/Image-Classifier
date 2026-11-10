@@ -372,15 +372,23 @@ def test_failed_download_reports_an_error(tmp_path: Path) -> None:
     assert len(calls) == 2
 
 
-def test_partial_download_is_kept_between_attempts_of_the_same_source(
+def test_a_complete_but_corrupt_archive_is_purged_before_the_next_attempt(
     tmp_path: Path,
 ) -> None:
+    """A transfer that ends cleanly but fails the digest cannot be resumed.
+
+    The file is complete, so the next attempt would resume at its end and
+    could never deliver the bytes that are missing. The script has to drop
+    the file and start the next attempt from byte 0. A transfer that really
+    stopped half way is a different case: it is kept and resumed.
+    """
     process, calls = _run_script(tmp_path, ["https://example.test/corrupt"])
 
     assert process.returncode == 1
     assert len(calls) == 2
-    # The second attempt sees the partial file and resumes it.
-    assert calls[1].size == len(CORRUPT_PAYLOAD)
+    # The second attempt starts from byte 0: the complete but wrong file was
+    # purged after the digest of the first attempt failed.
+    assert calls[1].size == 0
     # 'curl -C -' is what turns the partial file into a resumed download: the
     # offset has to be the next byte, not a separate flag.
     assert any(pair == ("-C", "-") for pair in zip(calls[1].argv, calls[1].argv[1:]))

@@ -29,8 +29,10 @@ ATTEMPTS="${CIFAR10_ATTEMPTS:-2}"
 # timeout and leaves room for the setup and the test run. A larger
 # per-attempt budget would hit the job timeout instead of the script's own
 # error path, which reports the failed download. The budget only succeeds
-# when the mirror sustains roughly 35 KB/s or more; below that the script
-# stops with its own error instead of running past the job timeout.
+# when one source sustains roughly 71 KB/s or more (170498071 bytes in
+# ATTEMPTS x TIMEOUT = 2400 s), because the partial is dropped when the
+# source changes. Below that the script stops with its own error instead of
+# running past the job timeout.
 TIMEOUT="${CIFAR10_TIMEOUT:-1200}"
 # The archive.org capture is pinned to an immutable id instead of the
 # "2020id_" closest-capture selector, so the mirror cannot start serving
@@ -129,9 +131,12 @@ else
         break 2
       fi
       last_failure="${url} (curl exit ${status})"
-      if [ "$attempt" -eq "$ATTEMPTS" ]; then
-        # The source is exhausted: drop the partial so the next source
-        # starts from byte 0 instead of splicing two byte streams.
+      if [ "$status" -eq 0 ] || [ "$attempt" -eq "$ATTEMPTS" ]; then
+        # A transfer that ended cleanly but fails the digest is a complete,
+        # wrong file: a resume would start at its end and could never repair
+        # it. The source is exhausted as well, so the partial is dropped in
+        # that case and the next source starts from byte 0 instead of
+        # splicing two byte streams.
         rm -f cifar-10-python.tar.gz
       fi
     done
