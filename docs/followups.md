@@ -37,23 +37,23 @@ matching Plane work item.
 ## ERROR-BODY — _parseErrorMessage reports the raw body, not the status code
 
 - **Plane:** IC-68
-- **Location:** `lib/services/api_client.dart:532` (`_parseErrorMessage`)
+- **Location:** `lib/services/api_client.dart:595` (`_parseErrorMessage`)
 - **Finding:** The backend error body is shown verbatim to the user instead of the
   HTTP status code, so a proxy or HTML error page leaks through the message.
 - **Fix:** Report the response status code and keep the body only for structured
   JSON error payloads.
 - **Delivered by PR #30:** `_parseErrorMessage` now takes the status code and
   falls back to `Request failed with status <code>`
-  (`lib/services/api_client.dart:532`); only a JSON payload with a `detail`
+  (`lib/services/api_client.dart:607`); only a JSON payload with a `detail`
   field is used as the message, so an HTML error page is no longer echoed to the
   user. The status code of the response is the status of the `ApiException`
-  (`lib/services/api_client.dart:448`).
+  (`lib/services/api_client.dart:508`).
 
 ## CI-DEDUP — duplicated Flutter CI workflows with divergent torch cache keys
 
 - **Plane:** IC-69
-- **Location:** `.github/workflows/backend-ci.yml:93`,
-  `.github/workflows/image-classifier-ci.yml:131`
+- **Location:** `.github/workflows/backend-ci.yml:98`,
+  `.github/workflows/image-classifier-ci.yml:136`
 - **Finding:** `backend-ci.yml` keys the torch weight cache on
   `torch-pretrained-tv-0.29.1-sha256-<cifar sha256>` while
   `image-classifier-ci.yml` uses the bare key `torch-pretrained-tv-0.29.1`, so
@@ -70,7 +70,7 @@ matching Plane work item.
 ## TORCH-CACHE-VERIFY — torch cache integrity step verifies nothing
 
 - **Plane:** IC-79
-- **Location:** `.github/workflows/backend-ci.yml:96-103`
+- **Location:** `.github/workflows/backend-ci.yml:101-107`
 - **Finding:** The `Verify torch cache integrity` step only echoes two strings;
   it never hashes or compares the cached weights. Its comments claim the
   weights are loaded with `torch.hub.load_state_dict_from_url(check_hash=True)`
@@ -204,7 +204,7 @@ matching Plane work item.
 - **Location:** `lib/config.dart:112` (`setApiBaseUrl`),
   `lib/config.dart:185` (`_rollbackStoredUrl`),
   `lib/config.dart:220` (`clearApiBaseUrl`),
-  `lib/screens/settings_screen.dart:200` (`_resetToDefault`)
+  `lib/screens/settings_screen.dart:201` (`_resetToDefault`)
 - **Finding:** `shared_preferences` 2.5.6 updates its in-memory cache *before* the
   platform call: `_setValue` writes `_preferenceCache[key]` and `remove` deletes
   `_preferenceCache[key]` before the platform answers. A refused write therefore
@@ -471,6 +471,10 @@ matching Plane work item.
   `-C -`, so it resumes from the partial file of the previous run.
 - **Fix:** Remove the partial file when the script starts, or verify that a
   resumed file belongs to the current source before it is used.
+- **Delivered by PR #30 (round 32):** the script now removes the archive when
+  the restored cache fails verification (`backend/scripts/fetch_cifar10.sh:132`),
+  so a partial file left by a killed run is dropped before the first transfer
+  starts.
 
 ## PROBE-URL — a malformed address is reported as an unreachable backend
 
@@ -481,11 +485,16 @@ matching Plane work item.
   cause for both. The user cannot tell a typo from a backend that is down.
 - **Fix:** Report the malformed address and the unreachable backend as two
   different causes.
+- **Scope note (round 32):** the settings screen never calls the probe with a
+  malformed address — the Test Connection button is disabled while the field
+  fails validation (`lib/screens/settings_screen.dart:292`), and
+  `test/settings_screen_test.dart` pins that. The conflation is therefore a
+  latent `ApiClient` contract gap, not a reachable user-facing defect.
 
 ## DISPOSE-NOOP — dispose() does nothing
 
 - **Plane:** IC-101
-- **Location:** `lib/services/api_client.dart:272`
+- **Location:** `lib/services/api_client.dart:292`
 - **Finding:** `dispose()` is a no-op because the client never owns the
   `http.Client`. The method is part of the public contract and suggests a
   cleanup that never happens.
@@ -504,7 +513,7 @@ matching Plane work item.
 ## SETTINGS-ERROR-TEXT — the settings banner echoed the raw error and the whole address
 
 - **Plane:** IC-103
-- **Location:** `lib/screens/settings_screen.dart:108` (`_describeError`),
+- **Location:** `lib/screens/settings_screen.dart:109` (`_describeError`),
   `lib/screens/settings_screen.dart:20` (`_displayUrl`)
 - **Finding:** The banner described an unknown failure with
   `error.toString()`, so a raw Dart error object reached the user, and it
@@ -604,6 +613,10 @@ matching Plane work item.
 - **Finding:** The rejection message names the limit as `10485760 byte
   limit`, which the user has to convert by hand.
 - **Fix:** Render the limit in MiB.
+- **Delivered by PR #30 (round 32):** the message now names the limit as a
+  byte count (`the compressed image is larger than the $maxBytes byte limit`),
+  so the rejected image and the limit are both stated; the unit conversion is
+  still open.
 
 ## REGISTER-POLISH — the register and the contract harness need polish
 
@@ -623,7 +636,7 @@ matching Plane work item.
 ## REDIRECT-HOST-ALLOWLIST — the download follows any HTTPS redirect host
 
 - **Plane:** IC-112
-- **Location:** `backend/scripts/fetch_cifar10.sh:123`
+- **Location:** `backend/scripts/fetch_cifar10.sh:156`
 - **Finding:** The round 26 review (Info severity) found that the download
   runs `curl -fL` and pins only the scheme (`--proto-redir '=https'`), so a
   redirect may send the transfer to any HTTPS host. The pinned md5 and sha256
