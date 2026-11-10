@@ -92,6 +92,9 @@ class PredictionProvider extends ChangeNotifier {
 
   /// Clears the current prediction state back to idle.
   void clear() {
+    // Invalidate any prediction still in flight: its completion callback
+    // must not write a stale result over this idle state.
+    _generation++;
     _state = const PredictionStateIdle();
     notifyListeners();
   }

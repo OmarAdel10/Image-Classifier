@@ -239,5 +239,29 @@ void main() {
         );
       },
     );
+
+    test('a prediction that answers after clear() does not overwrite the idle state', () async {
+      // clear() invalidates the in-flight prediction: its late answer must
+      // not replace the idle state the user asked for.
+      final pending = Completer<PredictionResponse>();
+      final lateResponse = PredictionResponse(
+        predictions: [PredictionItem(className: 'cat', confidence: 0.9)],
+        latencyMs: 1.0,
+        model: 'late',
+      );
+
+      when(mockApiClient.predictXFile(any)).thenAnswer((_) => pending.future);
+
+      final future = provider.predict(XFile('late.png'));
+      expect(provider.state, isA<PredictionStateLoading>());
+
+      provider.clear();
+      expect(provider.state, isA<PredictionStateIdle>());
+
+      // The stale answer arrives after the clear and must be dropped.
+      pending.complete(lateResponse);
+      await future;
+      expect(provider.state, isA<PredictionStateIdle>());
+    });
   });
 }
