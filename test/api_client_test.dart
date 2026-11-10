@@ -138,6 +138,20 @@ class _SendFaultClient extends http.BaseClient {
   }
 }
 
+/// A type error that carries the text of a failed cast.
+///
+/// Dart has no constructor for a type error with a message, so the error is
+/// taken from a cast that cannot succeed.
+TypeError _typeErrorWithText() {
+  final Object value = 1;
+  try {
+    value as String;
+  } on TypeError catch (error) {
+    return error;
+  }
+  throw StateError('the cast of an int to a string must fail');
+}
+
 void main() {
   group('ApiClient', () {
     late MockClient mockClient;
@@ -1396,6 +1410,43 @@ void main() {
             final apiClient = ApiClient(client: _SendFaultClient(fault));
 
             expect(await apiClient.healthStatusCode(), isNull);
+          },
+        );
+      }
+
+      final typeErrorFaults = <(String, TypeError)>[
+        ('a message', _typeErrorWithText()),
+        ('no message', TypeError()),
+      ];
+
+      for (final (label, fault) in typeErrorFaults) {
+        test(
+          'a send that fails with a type error with $label is reported as a response problem',
+          () async {
+            final apiClient = ApiClient(
+              client: _SendFaultClient(fault),
+              baseUrl: 'http://type-error.example.com:8000',
+            );
+
+            await expectLater(
+              apiClient.getModelInfo(),
+              throwsA(
+                isA<ApiException>()
+                    .having((e) => e.statusCode, 'statusCode', 502)
+                    .having(
+                      (e) => e.message,
+                      'message',
+                      // The wording is fixed: the raw text of the client must
+                      // never reach the screen, with or without a message.
+                      equals(
+                        'Invalid response from '
+                        'http://type-error.example.com:8000: unexpected '
+                        'response shape. Is the backend the image classifier '
+                        'API?',
+                      ),
+                    ),
+              ),
+            );
           },
         );
       }
