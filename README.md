@@ -224,7 +224,7 @@ with open("cat.jpg", "rb") as f:
 | `Connection refused` | Ensure FastAPI server is running on port 8000 |
 | `Cannot reach http://...` | No response arrived. The address in the error is the one that failed: check the backend is running there, and that it is bound to `0.0.0.0` rather than `127.0.0.1` (required for emulator/device access). Open ⚙ *Backend Settings* → **Test Connection**. On Android use `http://10.0.2.2:8000`; on a physical device use your computer's LAN IP. |
 | `Request to ... timed out after 15s` | The connection opened but no response arrived in time (`--dart-define=REQUEST_TIMEOUT_SEC`, default 15 s). Check the server log for a stalled request. |
-| `Could not read the response from ...` | The status line arrived but the body did not: the server closed the connection early, or the response exceeded the 10 MiB response budget. Check the server log. |
+| `Could not read the response from ...` | The status line arrived but the body did not: the server closed the connection early, stopped sending before the request timeout (`REQUEST_TIMEOUT_SEC`, default 15 s) expired, or the response exceeded the 10 MiB response budget. Check the server log. |
 | `the file is larger than the 10485760 byte limit` | The app rejects images over 10 MiB before upload. Crop or re-encode the image. |
 | `Model unavailable` | Ensure `backend/checkpoints/best_model.pt` exists |
 | Flutter build fails | Run `flutter clean && flutter pub get` |
