@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:image_classifier/config.dart';
 import 'package:image_classifier/screens/settings_screen.dart';
 import 'package:image_classifier/services/api_client.dart';
+import 'package:mockito/mockito.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
@@ -18,6 +19,7 @@ import 'support/false_prefs_store.dart';
 import 'support/false_removing_prefs_store.dart';
 import 'support/refusing_write_prefs_store.dart';
 import 'support/throwing_prefs_store.dart';
+import 'widget_test.mocks.dart';
 
 /// A built settings screen together with the [ApiClient] instance it uses.
 typedef SettingsHarness = ({Widget widget, ApiClient client});
@@ -26,8 +28,9 @@ typedef SettingsHarness = ({Widget widget, ApiClient client});
 SettingsHarness _buildSettingsScreen(
   http.Client httpClient, {
   String compileTimeOverride = Config.compileTimeApiBaseUrl,
+  ApiClient? apiClient,
 }) {
-  final client = ApiClient(client: httpClient);
+  final client = apiClient ?? ApiClient(client: httpClient);
   return (
     widget: Provider<ApiClient>.value(
       value: client,
@@ -327,6 +330,40 @@ void main() {
       // The reset failure names the error that caused it, like the other
       // failure messages on this screen.
       expect(find.textContaining('Provider<ApiClient>'), findsOneWidget);
+    });
+
+    testWidgets('reports a client failure without its raw text', (
+      WidgetTester tester,
+    ) async {
+      // The client fails in a way the screen does not name, so the banner has
+      // to report the failure without repeating its text.
+      final mockApiClient = MockApiClient();
+      when(mockApiClient.client).thenThrow(Exception('secret internal detail'));
+
+      final harness = _buildSettingsScreen(
+        MockClient((request) async => http.Response('{}', 200)),
+        apiClient: mockApiClient,
+      );
+      await tester.pumpWidget(harness.widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byType(TextField),
+        'http://saved.example.com:9000',
+      );
+      await tester.pump();
+
+      await tester.tap(_buttonWithLabel('Test Connection'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Could not test'), findsOneWidget);
+      // The generic arm names the failure class instead of the failure text.
+      expect(
+        find.textContaining('an unexpected error occurred'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('secret internal detail'), findsNothing);
+      expect(find.textContaining('Exception'), findsNothing);
     });
 
     testWidgets('reports a storage refusal instead of claiming success', (

@@ -48,19 +48,22 @@ Widget _buildHomeScreen({
   required http.Client httpClient,
   required ImageService imageService,
   ThemeData? theme,
+  ApiClient? apiClient,
 }) {
-  final apiClient = ApiClient(
-    client: httpClient,
-    // A generous budget: a short timeout races the mocked failures under
-    // load, which made the error-path tests flaky.
-    timeout: const Duration(seconds: 5),
-  );
+  final client =
+      apiClient ??
+      ApiClient(
+        client: httpClient,
+        // A generous budget: a short timeout races the mocked failures under
+        // load, which made the error-path tests flaky.
+        timeout: const Duration(seconds: 5),
+      );
   return MultiProvider(
     providers: [
       Provider<ImageService>.value(value: imageService),
-      Provider<ApiClient>.value(value: apiClient),
+      Provider<ApiClient>.value(value: client),
       ChangeNotifierProvider<PredictionProvider>(
-        create: (_) => PredictionProvider(apiClient: apiClient),
+        create: (_) => PredictionProvider(apiClient: client),
       ),
     ],
     child: MaterialApp(theme: theme, home: const HomeScreen()),
@@ -360,6 +363,53 @@ void main() {
       expect(find.textContaining('backend exploded'), findsNothing);
       expect(find.textContaining('StateError'), findsNothing);
     });
+
+    testWidgets(
+      'reports an unexpected model info failure without its raw text',
+      (WidgetTester tester) async {
+        final imageFile = _createTempImageFile();
+        final pickedFile = _InMemoryXFile(
+          imageFile.path,
+          imageFile.readAsBytesSync(),
+        );
+        final imageService = MockImageService();
+        when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+        when(imageService.validateAndCompress(any))
+            .thenAnswer((_) async => imageFile);
+
+        // The client is replaced by one that fails in a way the client itself
+        // does not name, so the screen has to report the failure with its own
+        // fixed message.
+        final mockApiClient = MockApiClient();
+        when(mockApiClient.getModelInfo())
+            .thenThrow(StateError('backend exploded'));
+
+        await tester.pumpWidget(
+          _buildHomeScreen(
+            httpClient: MockClient((request) async => http.Response('{}', 200)),
+            imageService: imageService,
+            apiClient: mockApiClient,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await _tapDropZoneAndSettle(tester);
+
+        expect(
+          find.textContaining('Could not load model info'),
+          findsOneWidget,
+        );
+        // The failure is not an ApiException, so the screen names it with its
+        // own message instead of repeating the raw error text.
+        expect(
+          find.textContaining('An unexpected error occurred.'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Bad state:'), findsNothing);
+        expect(find.textContaining('backend exploded'), findsNothing);
+        expect(find.textContaining('StateError'), findsNothing);
+      },
+    );
 
     testWidgets(
       'replaces a previous image error snackbar instead of queueing',
