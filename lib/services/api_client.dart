@@ -34,6 +34,20 @@ class ApiException implements Exception {
 
 /// Client for communicating with the FastAPI backend.
 class ApiClient {
+  /// The largest response body the client reads.
+  ///
+  /// The responses of this API are JSON documents of a few kilobytes, so a
+  /// body of ten mebibytes is already generous. The limit bounds the memory a
+  /// backend can make the app use.
+  static const int _maxResponseBytes = 10 * 1024 * 1024;
+
+  /// The grace period of the cleanup of a response body.
+  ///
+  /// The cleanup of a subscription is not part of the request budget: it only
+  /// releases the connection. It is bounded so that a stream which never
+  /// releases itself cannot keep the request pending.
+  static const Duration _cleanupGrace = Duration(milliseconds: 250);
+
   /// Creates an [ApiClient] with the given [client], optional [baseUrl], and [timeout].
   ///
   /// The [client] is owned by the caller and should be disposed by the caller.
@@ -86,11 +100,15 @@ class ApiClient {
   /// unhealthy backend (non-200) from an unreachable one (null).
   Future<int?> healthStatusCode() async {
     final url = await baseUrl;
+    http.StreamedResponse? streamedResponse;
     try {
-      final response = await client
-          .get(Uri.parse('$url/health'))
+      // The request is sent without reading the body: the health check only
+      // needs the status code, and a body that is never read cannot grow
+      // without bound.
+      streamedResponse = await client
+          .send(http.Request('GET', Uri.parse('$url/health')))
           .timeout(_timeout);
-      return response.statusCode;
+      return streamedResponse.statusCode;
     } on TimeoutException {
       return null;
     } on SocketException {
@@ -112,6 +130,8 @@ class ApiClient {
       return null;
     } on Error {
       return null;
+    } finally {
+      await _releaseBody(streamedResponse);
     }
   }
 
@@ -139,7 +159,7 @@ class ApiClient {
     // so a body that cannot be read into the expected shape is a response
     // problem and never a transport failure.
     if (response.statusCode == 200) {
-      return _parseResponse(response.body, url, ModelInfo.fromJson);
+      return _parseResponse(response, url, ModelInfo.fromJson);
     }
     throw _toApiException(response);
   }
@@ -199,7 +219,7 @@ class ApiClient {
     // so a body that cannot be read into the expected shape is a response
     // problem and never a transport failure.
     if (response.statusCode == 200) {
-      return _parseResponse(response.body, url, PredictionResponse.fromJson);
+      return _parseResponse(response, url, PredictionResponse.fromJson);
     }
     throw _toApiException(response);
   }
@@ -258,7 +278,7 @@ class ApiClient {
     // so a body that cannot be read into the expected shape is a response
     // problem and never a transport failure.
     if (response.statusCode == 200) {
-      return _parseResponse(response.body, url, PredictionResponse.fromJson);
+      return _parseResponse(response, url, PredictionResponse.fromJson);
     }
     throw _toApiException(response);
   }
@@ -310,19 +330,14 @@ class ApiClient {
     } on IOException {
       throw _transportFailure(url);
     } on FormatException {
-      throw ApiException(
-        message:
-            'Invalid response from $url. '
-            'The response could not be parsed as the expected JSON.',
-        statusCode: 502,
-      );
+      // The address could not be turned into a request, so nothing was sent
+      // and no response arrived. The wording of a response that cannot be
+      // parsed would name the wrong cause here.
+      throw _transportFailure(url);
     } on TypeError {
-      throw ApiException(
-        message:
-            'Invalid response from $url: unexpected response shape. '
-            'Is the backend the image classifier API?',
-        statusCode: 502,
-      );
+      // The client failed before a response arrived, so no status line was
+      // ever seen. The request never reached an answer.
+      throw _transportFailure(url);
     } on ArgumentError {
       // The address itself is validated before the request, so an
       // ArgumentError here comes from the request, not from the URL. The raw
@@ -369,51 +384,93 @@ class ApiClient {
       // The budget is spent, so the body cannot be read any more.
       throw _responseReadFailure(url);
     }
+    final declaredLength = streamedResponse.contentLength;
+    if (declaredLength != null && declaredLength > _maxResponseBytes) {
+      // The server announced a body that is larger than the client accepts.
+      // The body is not read at all.
+      throw _responseReadFailure(url);
+    }
     final completer = Completer<http.Response>();
     final buffer = BytesBuilder(copy: false);
+    var receivedBytes = 0;
     final timer = Timer(budget, () {
       if (!completer.isCompleted) {
         completer.completeError(_responseReadFailure(url));
       }
     });
-    final subscription = streamedResponse.stream.listen(
-      buffer.add,
-      onError: (Object error, StackTrace stackTrace) {
-        if (!completer.isCompleted) {
-          // The transport failed after the status line arrived. The error is
-          // dropped: it can carry any text, and the status code names the
-          // failure class.
-          completer.completeError(_responseReadFailure(url), stackTrace);
-        }
-      },
-      onDone: () {
-        if (!completer.isCompleted) {
-          completer.complete(
-            http.Response.bytes(
-              buffer.takeBytes(),
-              streamedResponse.statusCode,
-              headers: streamedResponse.headers,
-              request: streamedResponse.request,
-              reasonPhrase: streamedResponse.reasonPhrase,
-              isRedirect: streamedResponse.isRedirect,
-              persistentConnection: streamedResponse.persistentConnection,
-            ),
-          );
-        }
-      },
-      cancelOnError: true,
-    );
+    late final StreamSubscription<List<int>> subscription;
+    try {
+      subscription = streamedResponse.stream.listen(
+        (chunk) {
+          if (completer.isCompleted) return;
+          receivedBytes += chunk.length;
+          if (receivedBytes > _maxResponseBytes) {
+            // The body grew past the limit, so the read stops here. The
+            // chunk is not kept: the response is refused as a whole.
+            completer.completeError(_responseReadFailure(url));
+            return;
+          }
+          buffer.add(chunk);
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          if (!completer.isCompleted) {
+            // The transport failed after the status line arrived. The error is
+            // dropped: it can carry any text, and the status code names the
+            // failure class.
+            completer.completeError(_responseReadFailure(url), stackTrace);
+          }
+        },
+        onDone: () {
+          if (!completer.isCompleted) {
+            completer.complete(
+              http.Response.bytes(
+                buffer.takeBytes(),
+                streamedResponse.statusCode,
+                headers: streamedResponse.headers,
+                request: streamedResponse.request,
+                reasonPhrase: streamedResponse.reasonPhrase,
+                isRedirect: streamedResponse.isRedirect,
+                persistentConnection: streamedResponse.persistentConnection,
+              ),
+            );
+          }
+        },
+        cancelOnError: true,
+      );
+    } catch (_) {
+      // The subscription could not be set up. The status line arrived, so this
+      // is a response problem and not a transport failure.
+      timer.cancel();
+      throw _responseReadFailure(url);
+    }
     try {
       return await completer.future;
     } finally {
       timer.cancel();
       try {
-        await subscription.cancel();
+        // The cleanup of the subscription is bounded: a stream that never
+        // releases itself must not keep the request pending.
+        await subscription.cancel().timeout(_cleanupGrace, onTimeout: () {});
       } catch (_) {
         // A failure to release the subscription must not replace the failure
         // that ended the read: the user has to see why the response could
         // not be read.
       }
+    }
+  }
+
+  /// Releases a response body that was not read.
+  ///
+  /// The release is bounded, so a stream that never ends cannot keep the
+  /// request pending.
+  Future<void> _releaseBody(http.StreamedResponse? streamedResponse) async {
+    if (streamedResponse == null) return;
+    try {
+      final subscription = streamedResponse.stream.listen(null);
+      await subscription.cancel().timeout(_cleanupGrace, onTimeout: () {});
+    } catch (_) {
+      // A body that cannot be released is not a failure of the request: the
+      // status code was read already.
     }
   }
 
@@ -447,9 +504,21 @@ class ApiClient {
 
   ApiException _toApiException(http.Response response) {
     return ApiException(
-      message: _parseErrorMessage(response.body, response.statusCode),
+      message: _parseErrorMessage(_bodyOrEmpty(response), response.statusCode),
       statusCode: response.statusCode,
     );
+  }
+
+  /// Reads the body of a failed request as text.
+  ///
+  /// A body that is not text carries no `detail` field, so the fixed status
+  /// message is used. The status of the answer still names the failure.
+  String _bodyOrEmpty(http.Response response) {
+    try {
+      return response.body;
+    } on FormatException {
+      return '';
+    }
   }
 
   /// Reads the body of a successful response into the expected shape.
@@ -459,10 +528,18 @@ class ApiClient {
   /// fixed message, so no raw error text - an assertion message or a cast
   /// error - can reach the user.
   T _parseResponse<T>(
-    String body,
+    http.Response response,
     String url,
     T Function(Map<String, dynamic>) fromJson,
   ) {
+    final String body;
+    try {
+      body = response.body;
+    } on FormatException {
+      // The bytes arrived, but they are not text. The backend answered, so
+      // this is a response problem and not a transport failure.
+      throw _responseReadFailure(url);
+    }
     final Map<String, dynamic> json;
     try {
       json = _parseJsonMap(body);
@@ -476,26 +553,12 @@ class ApiClient {
     }
     try {
       return fromJson(json);
-    } on TypeError {
-      throw ApiException(
-        message:
-            'Invalid response from $url: unexpected response shape. '
-            'Is the backend the image classifier API?',
-        statusCode: 502,
-      );
-    } on Exception {
+    } catch (_) {
       // The body has the JSON shape the model expects, but the model cannot
-      // read it - for example because a value is outside its range. The
-      // failure is still a response problem.
-      throw ApiException(
-        message:
-            'Invalid response from $url: unexpected response shape. '
-            'Is the backend the image classifier API?',
-        statusCode: 502,
-      );
-    } on Error {
-      // The same holds for an error that is not an exception, such as the
-      // assertion that guards the confidence range.
+      // read it - a value is outside its range, a field has the wrong type or
+      // the model rejects the document. Every one of those failures is the
+      // same response problem, and the raw text of the failure never leaves
+      // this method.
       throw ApiException(
         message:
             'Invalid response from $url: unexpected response shape. '

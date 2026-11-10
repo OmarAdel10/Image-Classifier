@@ -167,7 +167,7 @@ void main() {
           isA<ImageValidationException>().having(
             (e) => e.message,
             'message',
-            'the compressed image is larger than the size limit',
+            'the compressed image is larger than the $limit byte limit',
           ),
         ),
       );

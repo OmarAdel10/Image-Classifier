@@ -19,9 +19,10 @@ import 'package:image_classifier/services/api_client.dart';
 /// host or leave the tail of the password behind.
 String _displayUrl(String url) {
   final cleaned = url.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
+  // The pattern matches every string: the scheme is optional and the
+  // authority may be empty.
   final match = RegExp(r'^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)')
-      .firstMatch(cleaned);
-  if (match == null) return cleaned;
+      .firstMatch(cleaned)!;
   final scheme = match.group(1) ?? '';
   final authority = match.group(2) ?? '';
   final at = authority.lastIndexOf('@');

@@ -257,6 +257,28 @@ void main() {
       });
     });
 
+    group('setApiBaseUrl validation', () {
+      test('refuses a URL with credentials and names no secret', () async {
+        await expectLater(
+          Config.setApiBaseUrl('http://user:pass@example.com:8000'),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('Invalid API base URL'),
+                // The rejected address carries a credential, so the message
+                // must name the problem only.
+                isNot(contains('user')),
+                isNot(contains('pass')),
+                isNot(contains('example.com')),
+              ),
+            ),
+          ),
+        );
+      });
+    });
+
     group('validateStartupApiBaseUrl', () {
       test('throws StateError for a non-empty invalid override', () {
         expect(

@@ -120,7 +120,7 @@ class ImageService {
     // Check compressed size
     if (jpegBytes.length > maxBytes) {
       throw ImageValidationException(
-        'the compressed image is larger than the size limit',
+        'the compressed image is larger than the $maxBytes byte limit',
       );
     }
 

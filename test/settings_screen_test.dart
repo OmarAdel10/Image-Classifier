@@ -778,6 +778,31 @@ void main() {
       );
     });
 
+    testWidgets('a malformed address disables Test Connection', (
+      WidgetTester tester,
+    ) async {
+      final requestedUrls = <String>[];
+      final mockClient = MockClient((request) async {
+        requestedUrls.add(request.url.toString());
+        return http.Response('{"status": "ok"}', 200);
+      });
+
+      await tester.pumpWidget(_buildSettingsScreen(mockClient).widget);
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), 'not a url');
+      await tester.pump();
+
+      // The probe is gated on the same validator as Save: a typo cannot be
+      // reported as an unreachable backend, because no probe is made at all.
+      final probe = tester.widget<ButtonStyleButton>(
+        _buttonWithLabel('Test Connection'),
+      );
+      expect(probe.onPressed, isNull);
+      expect(requestedUrls, isEmpty);
+      expect(find.textContaining('Could not reach'), findsNothing);
+    });
+
     testWidgets('Test Connection reports a reachable but unhealthy backend', (
       WidgetTester tester,
     ) async {

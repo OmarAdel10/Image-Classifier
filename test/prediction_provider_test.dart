@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
@@ -193,5 +195,49 @@ void main() {
       // Should end up with result from last call
       expect(provider.state, isA<PredictionStateResult>());
     });
+
+    test(
+      'a prediction that answers late does not overwrite a newer one',
+      () async {
+        // The first request answers after the second one. The newer request
+        // owns the state, so the late answer has to be dropped.
+        final first = Completer<PredictionResponse>();
+        final second = Completer<PredictionResponse>();
+        final firstResponse = PredictionResponse(
+          predictions: [PredictionItem(className: 'cat', confidence: 0.9)],
+          latencyMs: 1.0,
+          model: 'first',
+        );
+        final secondResponse = PredictionResponse(
+          predictions: [PredictionItem(className: 'dog', confidence: 0.8)],
+          latencyMs: 2.0,
+          model: 'second',
+        );
+
+        when(mockApiClient.predictXFile(any)).thenAnswer((invocation) {
+          final file = invocation.positionalArguments.first as XFile;
+          return file.path.contains('first') ? first.future : second.future;
+        });
+
+        final future1 = provider.predict(XFile('first.png'));
+        final future2 = provider.predict(XFile('second.png'));
+
+        // The newer request answers first.
+        second.complete(secondResponse);
+        await future2;
+        expect(
+          (provider.state as PredictionStateResult).response.model,
+          'second',
+        );
+
+        // The older request answers late and must not change the state.
+        first.complete(firstResponse);
+        await future1;
+        expect(
+          (provider.state as PredictionStateResult).response.model,
+          'second',
+        );
+      },
+    );
   });
 }

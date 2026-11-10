@@ -152,6 +152,100 @@ TypeError _typeErrorWithText() {
   throw StateError('the cast of an int to a string must fail');
 }
 
+/// A client whose body stream cannot be released.
+///
+/// The cleanup of the subscription never completes, so a body read that waits
+/// for it would never finish.
+class _NeverReleasingBodyClient extends http.BaseClient {
+  _NeverReleasingBodyClient(this.body);
+
+  final StreamController<List<int>> body;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(body.stream, 200, contentLength: 128);
+  }
+}
+
+/// A body stream that fails while the subscription is set up.
+///
+/// The status line arrived, so a failure here is a response problem.
+class _ThrowingListenStream extends Stream<List<int>> {
+  _ThrowingListenStream(this.fault);
+
+  final Object fault;
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int> event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    throw fault;
+  }
+}
+
+/// A client whose body stream fails while the subscription is set up.
+class _ThrowingListenClient extends http.BaseClient {
+  _ThrowingListenClient(this.fault);
+
+  final Object fault;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(_ThrowingListenStream(fault), 200);
+  }
+}
+
+/// A client whose response declares a body larger than the client accepts.
+class _DeclaredLengthClient extends http.BaseClient {
+  _DeclaredLengthClient(this.body, this.contentLength);
+
+  final StreamController<List<int>> body;
+  final int contentLength;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(
+      body.stream,
+      200,
+      contentLength: contentLength,
+    );
+  }
+}
+
+/// A client whose response body is a stream of its own.
+class _StreamedBodyClient extends http.BaseClient {
+  _StreamedBodyClient(this.body);
+
+  final Stream<List<int>> body;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(body, 200);
+  }
+}
+
+/// A client that answers with bytes that are not valid UTF-8.
+class _BinaryBodyClient extends http.BaseClient {
+  _BinaryBodyClient(this.bytes, this.statusCode);
+
+  final List<int> bytes;
+  final int statusCode;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    return http.StreamedResponse(
+      Stream.value(bytes),
+      statusCode,
+      // The charset is named, so the body is decoded as UTF-8 and a byte
+      // sequence that is not text fails the decode.
+      headers: {'content-type': 'application/json; charset=utf-8'},
+    );
+  }
+}
+
 void main() {
   group('ApiClient', () {
     late MockClient mockClient;
@@ -1421,7 +1515,7 @@ void main() {
 
       for (final (label, fault) in typeErrorFaults) {
         test(
-          'a send that fails with a type error with $label is reported as a response problem',
+          'a send that fails with a type error with $label is reported as a transport failure',
           () async {
             final apiClient = ApiClient(
               client: _SendFaultClient(fault),
@@ -1432,17 +1526,18 @@ void main() {
               apiClient.getModelInfo(),
               throwsA(
                 isA<ApiException>()
-                    .having((e) => e.statusCode, 'statusCode', 502)
+                    .having((e) => e.statusCode, 'statusCode', 503)
                     .having(
                       (e) => e.message,
                       'message',
-                      // The wording is fixed: the raw text of the client must
-                      // never reach the screen, with or without a message.
+                      // No response arrived, so the request never reached an
+                      // answer. The wording is fixed: the raw text of the
+                      // client must never reach the screen, with or without a
+                      // message.
                       equals(
-                        'Invalid response from '
-                        'http://type-error.example.com:8000: unexpected '
-                        'response shape. Is the backend the image classifier '
-                        'API?',
+                        'Cannot reach http://type-error.example.com:8000. '
+                        'Check that the backend is running and that the '
+                        'address is reachable from this device.',
                       ),
                     ),
               ),
@@ -1485,6 +1580,173 @@ void main() {
           ),
         );
       });
+    });
+
+    group('the response budget', () {
+      test(
+        'a body that cannot be released does not keep the request pending',
+        () async {
+          // The cleanup of the subscription never completes. The request has
+          // to finish with the response problem instead of waiting forever.
+          final controller = StreamController<List<int>>(
+            onCancel: () => Completer<void>().future,
+          );
+          final apiClient = ApiClient(
+            client: _NeverReleasingBodyClient(controller),
+            timeout: const Duration(milliseconds: 500),
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.statusCode, 'statusCode', 502)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('Could not read the response from'),
+                  ),
+            ),
+          );
+        },
+      );
+
+      test('a response that declares more than the cap is refused before it is read', () async {
+        var listened = false;
+        final body = StreamController<List<int>>(
+          onListen: () => listened = true,
+        );
+        final apiClient = ApiClient(
+          client: _DeclaredLengthClient(
+            body,
+            // The client accepts a body of 10 MiB at most.
+            10 * 1024 * 1024 + 1,
+          ),
+          timeout: const Duration(milliseconds: 500),
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 502)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  contains('Could not read the response from'),
+                ),
+          ),
+        );
+        // The body must not be read at all.
+        expect(listened, isFalse);
+      });
+
+      test(
+        'a response that grows past the cap is refused while it is read',
+        () async {
+          final chunk = Uint8List(1024 * 1024);
+          final apiClient = ApiClient(
+            client: _StreamedBodyClient(
+              Stream<List<int>>.fromIterable(List.filled(11, chunk)),
+            ),
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.statusCode, 'statusCode', 502)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    contains('Could not read the response from'),
+                  ),
+            ),
+          );
+        },
+      );
+
+      final listenFaults = <(String, Object)>[
+        ('an I/O error', HandshakeException('secret listen detail')),
+        ('an error', StateError('secret listen detail')),
+      ];
+
+      for (final (label, fault) in listenFaults) {
+        test(
+          'a body that fails while the subscription is set up with $label is a response problem',
+          () async {
+            final apiClient = ApiClient(client: _ThrowingListenClient(fault));
+
+            await expectLater(
+              apiClient.getModelInfo(),
+              throwsA(
+                isA<ApiException>()
+                    .having((e) => e.statusCode, 'statusCode', 502)
+                    .having(
+                      (e) => e.message,
+                      'message',
+                      allOf(
+                        contains('Could not read the response from'),
+                        // The raw error text must not reach the screen.
+                        isNot(contains('secret listen detail')),
+                        isNot(contains('Bad state')),
+                      ),
+                    ),
+              ),
+            );
+          },
+        );
+      }
+    });
+
+    group('the response text', () {
+      test('a body that is not text is a response problem', () async {
+        final apiClient = ApiClient(
+          client: _BinaryBodyClient(const [0xC3, 0x28], 200),
+          baseUrl: 'http://binary.example.com:8000',
+        );
+
+        await expectLater(
+          apiClient.getModelInfo(),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 502)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Could not read the response from'),
+                    // The bytes arrived, so the backend answered: the failure
+                    // must not be reported as an unreachable backend.
+                    isNot(contains('Cannot reach')),
+                  ),
+                ),
+          ),
+        );
+      });
+
+      test(
+        'a failed request with a body that is not text keeps the status',
+        () async {
+          final apiClient = ApiClient(
+            client: _BinaryBodyClient(const [0xC3, 0x28], 500),
+            baseUrl: 'http://binary.example.com:8000',
+          );
+
+          await expectLater(
+            apiClient.getModelInfo(),
+            throwsA(
+              isA<ApiException>()
+                  .having((e) => e.statusCode, 'statusCode', 500)
+                  .having(
+                    (e) => e.message,
+                    'message',
+                    'Request failed with status 500',
+                  ),
+            ),
+          );
+        },
+      );
     });
 
     test('dispose leaves a caller owned client usable', () async {
@@ -1695,17 +1957,17 @@ void main() {
       expect(item.confidence, 0.42);
     });
 
-    test('asserts out-of-range confidence in debug mode (IC-59)', () {
-      // Debug builds (including flutter test) surface server bugs loudly
-      // via the assert; release builds keep the defensive clamp.
+    test('rejects out-of-range confidence in every build (IC-59)', () {
+      // The guard has to run in a release build too: a release build used to
+      // clamp the value and report a prediction the backend never made.
       expect(
         () => PredictionItem.fromJson({'class_name': 'cat', 'confidence': 1.5}),
-        throwsA(isA<AssertionError>()),
+        throwsA(isA<FormatException>()),
       );
       expect(
         () =>
             PredictionItem.fromJson({'class_name': 'cat', 'confidence': -0.5}),
-        throwsA(isA<AssertionError>()),
+        throwsA(isA<FormatException>()),
       );
     });
   });

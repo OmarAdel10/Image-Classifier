@@ -40,39 +40,53 @@ class PredictionProvider extends ChangeNotifier {
 
   PredictionState _state = const PredictionStateIdle();
 
+  /// The number of the prediction that owns the state.
+  ///
+  /// Every request takes the next number. A request that finishes after a
+  /// newer one started sees a different number and drops its answer.
+  int _generation = 0;
+
   PredictionState get state => _state;
 
   /// Predicts the class of the given image file.
   ///
   /// Updates state through: idle -> loading -> result|error
   Future<void> predict(XFile file) async {
-    // If already loading, we still start a new prediction
-    // The previous one will be abandoned when state updates
+    // If already loading, we still start a new prediction. The request that
+    // started first is abandoned: only the newest request owns the state, so
+    // a late answer cannot overwrite the answer of a newer request.
+    final generation = ++_generation;
     _state = const PredictionStateLoading();
     notifyListeners();
 
     try {
       final response = await apiClient.predictXFile(file);
+      if (generation != _generation) return;
       _state = PredictionStateResult(response: response);
     } on ApiException catch (e) {
+      if (generation != _generation) return;
       _state = PredictionStateError(message: e.message);
     } on Exception {
       // Any other exception is unexpected. The raw text is not shown, so an
       // internal detail cannot leak into the UI.
+      if (generation != _generation) return;
       _state = const PredictionStateError(message: 'The prediction failed.');
     } on TypeError {
       // A response with an unexpected shape fails with a TypeError. The
       // user gets a fixed message: the raw error text is not shown.
+      if (generation != _generation) return;
       _state = const PredictionStateError(
         message: 'The backend returned an unexpected response.',
       );
     } on Error {
       // Any other Error (a programming or parsing error) must never leave
       // the UI stuck in Loading, but its text is not shown to the user.
+      if (generation != _generation) return;
       _state = const PredictionStateError(
         message: 'The prediction failed with an unexpected error.',
       );
     }
+    if (generation != _generation) return;
     notifyListeners();
   }
 
