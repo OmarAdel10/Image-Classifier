@@ -30,25 +30,28 @@ A CIFAR-10 image classification system with a PyTorch/FastAPI backend and a Flut
 │   │       ├── config.py       # Configuration (env-configurable)
 │   │       ├── inference/      # Checkpoint loading, preprocessing, prediction
 │   │       ├── models/         # Model registry (cnn_scratch, resnet18, vgg16)
-│   │       ├── training/       # Training loop, checkpointing
-│   │       └── inference/      # ONNX export script
+│   │       └── training/       # Training loop, checkpointing
 │   ├── scripts/
+│   │   ├── fetch_cifar10.sh    # Verified CIFAR-10 download (used by CI)
 │   │   ├── train_scratch.py    # Train from scratch
+│   │   ├── train_transfer.py   # Fine-tune a pretrained model
 │   │   └── export_onnx.py      # Export to ONNX
-│   ├── tests/                  # pytest suite (159 tests)
+│   ├── tests/                  # pytest suite (402 tests)
 │   └── pyproject.toml
 ├── lib/                        # Flutter app
 │   ├── config.dart             # Config (--dart-define overrides)
 │   ├── main.dart               # App entry point
 │   ├── models/                 # Data models (PredictionItem, ModelInfo)
 │   ├── providers/              # PredictionProvider (ChangeNotifier)
-│   ├── screens/                # HomeScreen, ResultScreen
+│   ├── screens/                # HomeScreen, ResultScreen, SettingsScreen
 │   ├── services/               # ImageService, ApiClient
 │   └── widgets/                # DropZone, PredictionBars, ModelInfoCard, LoadingOverlay
 ├── test/                       # Flutter widget tests
 ├── .github/workflows/
 │   ├── backend-ci.yml          # Python CI (ruff, black, pytest)
-│   └── flutter-ci.yml          # Flutter CI (format, analyze, test)
+│   ├── flutter-ci.yml          # Flutter CI (format, analyze, test) + gitleaks
+│   ├── image-classifier-ci.yml # Flutter + Python backend CI
+│   └── image-classifier-cd.yml # Release build (master only)
 └── README.md
 ```
 
@@ -68,10 +71,10 @@ pip install -e .[dev]
 ### Training
 ```bash
 # Train from scratch (CNN)
-python scripts/train_scratch.py --epochs 20 --lr 1e-3 --batch-size 128
+python scripts/train_scratch.py --epochs 20 --lr 1e-3 --model-name cnn_scratch
 
-# Train with pretrained ResNet18
-python scripts/train_pretrained.py --model resnet18 --epochs 10 --lr 1e-3
+# Fine-tune a pretrained ResNet18
+python scripts/train_transfer.py --model-name resnet18 --epochs 10 --lr 1e-4
 ```
 
 Checkpoints are saved to `backend/checkpoints/best_model.pt`.
@@ -150,8 +153,9 @@ The backend address is resolved in this order:
      (the emulator's `localhost` is the emulator itself, not your computer)
 
 The settings screen has a **Test Connection** button that probes `/health`
-against the typed URL before you save it, and reports the exact address it
-tried when the connection fails.
+against the typed URL before you save it, and reports the address it tried
+when the connection fails. Any credentials in that address are removed
+first, so the banner cannot repeat a password.
 
 #### Reaching the Backend
 
@@ -218,9 +222,10 @@ with open("cat.jpg", "rb") as f:
 |-------|----------|
 | `ModuleNotFoundError: cnn_classifier` | Run `pip install -e .[dev]` from `backend/` |
 | `Connection refused` | Ensure FastAPI server is running on port 8000 |
-| `Cannot reach http://...` | The address in the error is the one that failed. Open ⚙ *Backend Settings* → **Test Connection**. On Android use `http://10.0.2.2:8000`; on a physical device use your computer's LAN IP. |
-| `Network error` / `Request timed out` | The backend is unreachable at the configured address, or it is bound to `127.0.0.1` instead of `0.0.0.0` (required for emulator/device access). |
-| `File too large` | Max upload size is 10MB (configurable via `--dart-define`) |
+| `Cannot reach http://...` | No response arrived. The address in the error is the one that failed: check the backend is running there, and that it is bound to `0.0.0.0` rather than `127.0.0.1` (required for emulator/device access). Open ⚙ *Backend Settings* → **Test Connection**. On Android use `http://10.0.2.2:8000`; on a physical device use your computer's LAN IP. |
+| `Request to ... timed out after 15s` | The connection opened but no response arrived in time (`--dart-define=REQUEST_TIMEOUT_SEC`, default 15 s). Check the server log for a stalled request. |
+| `Could not read the response from ...` | The status line arrived but the body did not: the server closed the connection early, or the response exceeded the 10 MiB response budget. Check the server log. |
+| `the file is larger than the 10485760 byte limit` | The app rejects images over 10 MiB before upload. Crop or re-encode the image. |
 | `Model unavailable` | Ensure `backend/checkpoints/best_model.pt` exists |
 | Flutter build fails | Run `flutter clean && flutter pub get` |
 
@@ -243,7 +248,9 @@ flutter test
 ### CI/CD
 GitHub Actions workflows:
 - `.github/workflows/backend-ci.yml` - Python (ruff, black, pytest)
-- `.github/workflows/flutter-ci.yml` - Flutter (format, analyze, test)
+- `.github/workflows/flutter-ci.yml` - Flutter (format, analyze, test) + gitleaks
+- `.github/workflows/image-classifier-ci.yml` - Flutter + Python backend CI
+- `.github/workflows/image-classifier-cd.yml` - release build, `master` only
 
 ## License
 
