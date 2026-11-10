@@ -37,17 +37,17 @@ matching Plane work item.
 ## ERROR-BODY — _parseErrorMessage reports the raw body, not the status code
 
 - **Plane:** IC-68
-- **Location:** `lib/services/api_client.dart:461` (`_parseErrorMessage`)
+- **Location:** `lib/services/api_client.dart:532` (`_parseErrorMessage`)
 - **Finding:** The backend error body is shown verbatim to the user instead of the
   HTTP status code, so a proxy or HTML error page leaks through the message.
 - **Fix:** Report the response status code and keep the body only for structured
   JSON error payloads.
 - **Delivered by PR #30:** `_parseErrorMessage` now takes the status code and
   falls back to `Request failed with status <code>`
-  (`lib/services/api_client.dart:461`); only a JSON payload with a `detail`
+  (`lib/services/api_client.dart:532`); only a JSON payload with a `detail`
   field is used as the message, so an HTML error page is no longer echoed to the
   user. The status code of the response is the status of the `ApiException`
-  (`lib/services/api_client.dart:430`).
+  (`lib/services/api_client.dart:448`).
 
 ## CI-DEDUP — duplicated Flutter CI workflows with divergent torch cache keys
 
@@ -85,7 +85,7 @@ matching Plane work item.
 ## FLAKY-HOME — flaky home_screen snackbar test
 
 - **Plane:** IC-71
-- **Location:** `test/home_screen_test.dart:404`
+- **Location:** `test/home_screen_test.dart:454`
 - **Finding:** The `prediction errors offer a Settings action that navigates`
   test was observed to fail intermittently: the Settings-action SnackBar is
   queued from an async error path, so the widget lookup can run before the
@@ -122,9 +122,9 @@ matching Plane work item.
 ## API-MESSAGES — misleading exception messages
 
 - **Plane:** IC-77
-- **Location:** `lib/services/api_client.dart:295`,
-  `lib/services/api_client.dart:302`,
-  `lib/services/api_client.dart:309`
+- **Location:** `lib/services/api_client.dart:312`,
+  `lib/services/api_client.dart:319`,
+  `lib/services/api_client.dart:326`
 - **Finding:** A `Uri.parse` `FormatException` is reported as
   `Invalid response from ...` although it is a request-construction error, and
   `${e.message}` can render `null`. A missing image file raises a
@@ -135,35 +135,40 @@ matching Plane work item.
 - **Delivered in PR #30:** a missing image file is now reported as
   `Could not read the image file.` (status 400) before the request is
   sent, a file that exists but cannot be read is reported the same way when
-  the request body is streamed (`lib/services/api_client.dart:173`,
-  `lib/services/api_client.dart:229`), a response
+  the request body is streamed (`lib/services/api_client.dart:176-186`,
+  `lib/services/api_client.dart:235-245`), a response
   body that cannot be read is reported as `Could not read the response from
   ...` (status 502) instead of `Connection to ... failed`
-  (`lib/services/api_client.dart:131`, `lib/services/api_client.dart:188`,
-  `lib/services/api_client.dart:244`), a response body that never ends is
+  (`lib/services/api_client.dart:131`, `lib/services/api_client.dart:191`,
+  `lib/services/api_client.dart:250`), a response body that never ends is
   reported as a response problem (status
   502, `Could not read the response from ...`) instead of hanging the request
   or blaming the backend, and an `ArgumentError` is reported as
   `Invalid request to ...` with a null-safe message that carries no raw
   argument text.
 - **Delivered in PR #30:** every transport failure now carries one status code
-  (503) and one fixed message (`lib/services/api_client.dart:288-294`,
-  `lib/services/api_client.dart:421`), so a TLS failure no longer shows
+  (503) and one fixed message (`lib/services/api_client.dart:304-311`,
+  `lib/services/api_client.dart:439`), so a TLS failure no longer shows
   `HandshakeException: ...` and the backend is not blamed for a file problem.
   The file messages carry no local path, and the `FormatException` arm
-  (`lib/services/api_client.dart:295`) uses fixed wording without the raw
+  (`lib/services/api_client.dart:312`) uses fixed wording without the raw
   exception text.
 - **Delivered in PR #30 (round 28):** the taxonomy is closed. Every failure of
   the response body, whatever its type, is reported as the same 502 response
-  problem (`lib/services/api_client.dart:407`), every other exception of the
+  problem (`lib/services/api_client.dart:425`), every other exception of the
   request path is reported as the same 503 transport failure
-  (`lib/services/api_client.dart:314-321`), and the health probe treats every
-  failure as an unreachable backend (`lib/services/api_client.dart:106-116`),
+  (`lib/services/api_client.dart:331-340`), and the health probe treats every
+  failure as an unreachable backend (`lib/services/api_client.dart:108-115`),
   so no raw exception text can reach the user.
-- **Still open in IC-77:** the `FormatException` arm covers a
-  request-construction failure and a response-parse failure at the same time,
-  so the wording is still wrong for the first case. The two failures need two
-  messages.
+- **Delivered in PR #30 (round 29):** the response body is parsed outside the
+  transport wrapper (`lib/services/api_client.dart:461`, `_parseResponse`), so a
+  200 response that cannot be read into the expected shape — for example a
+  confidence outside `[0, 1]` — is reported as the 502 response problem
+  `Invalid response from ...` and never as a transport failure.
+- **Still open in IC-77:** the `FormatException` arm
+  (`lib/services/api_client.dart:312`) covers a request-construction failure
+  only — the response parse has its own message in `_parseResponse` — so the
+  remaining work is the wording of the request-construction case.
 - **Note:** The port bound at `lib/config.dart:256` (`uri.port > 65535`) is
   load-bearing and must stay: Dart's `Uri` parser does not range-check ports,
   so `http://example.com:99999` parses successfully and only this check
@@ -368,7 +373,7 @@ matching Plane work item.
 ## TRANSPORT-STATUS — transport failures use two different status codes
 
 - **Plane:** IC-91
-- **Location:** `lib/services/api_client.dart:288-294`
+- **Location:** `lib/services/api_client.dart:304-311`
 - **Finding:** A transport failure is reported with status `502` when the
   client raises an `http.ClientException` and with status `503` when it
   raises another `IOException`, so the same user-visible problem (the backend
@@ -378,7 +383,7 @@ matching Plane work item.
 - **Fix:** Map every transport failure to one status code and one message.
 - **Delivered by PR #30:** a `SocketException`, an `http.ClientException`, an
   `HttpException` and an `IOException` all raise the same `ApiException`
-  (status 503, `lib/services/api_client.dart:421`), so one unreachable backend
+  (status 503, `lib/services/api_client.dart:439`), so one unreachable backend
   now carries one code and one message.
 
 ## IMAGE-SIZE — the rejection message does not name the size of the file
@@ -480,7 +485,7 @@ matching Plane work item.
 ## DISPOSE-NOOP — dispose() does nothing
 
 - **Plane:** IC-101
-- **Location:** `lib/services/api_client.dart:263`
+- **Location:** `lib/services/api_client.dart:272`
 - **Finding:** `dispose()` is a no-op because the client never owns the
   `http.Client`. The method is part of the public contract and suggests a
   cleanup that never happens.
