@@ -18,6 +18,7 @@
 #   CIFAR10_URLS      newline separated list of download URLs
 #   CIFAR10_ATTEMPTS  download attempts per source (default 2)
 #   CIFAR10_TIMEOUT   seconds allowed per attempt (default 1200)
+#   CIFAR10_MAX_BYTES size cap of the archive in bytes (default 200000000)
 set -euo pipefail
 
 CACHE_DIR="${1:?usage: fetch_cifar10.sh <cache-dir>}"
@@ -56,9 +57,11 @@ fi
 
 # A rejected value is written to the CI log. A line break in the value could
 # forge a workflow command, so the line breaks are removed before the value
-# is reported.
+# is reported. The percent sign is escaped as well: GitHub Actions decodes
+# %0A and %0D inside a workflow command, so an unescaped percent sign could
+# carry a second command into the log.
 log_safe() {
-  printf '%s' "$1" | tr -d '\000-\037\177'
+  printf '%s' "$1" | tr -d '\000-\037\177' | sed 's/%/%25/g'
 }
 
 if ! [[ "$ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
@@ -85,8 +88,33 @@ if ! [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 
-mkdir -p "$CACHE_DIR"
-cd "$CACHE_DIR"
+# The archive must never grow past the cap, not even for a moment: a broken
+# or hostile mirror could serve an arbitrarily large body before the digest
+# check rejects it. curl --max-filesize can only know the cap when the
+# server announces the length, so the script bounds the file itself:
+#   * the file size limit of the shell stops a transfer that announces no
+#     length (bash counts 1024 byte blocks), and
+#   * the size of the file is checked after every attempt, so a file that
+#     grew past the cap is refused even when the limit could not stop it.
+# The cap stays above the real archive, which is 170498071 bytes.
+MAX_BYTES="${CIFAR10_MAX_BYTES:-200000000}"
+if ! [[ "$MAX_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+  echo "::error::CIFAR10_MAX_BYTES must be a positive integer, got '$(log_safe "$MAX_BYTES")'."
+  exit 1
+fi
+
+# The file size limit is inherited by curl, so a transfer without a declared
+# length is stopped at the cap. The limit is counted in 1024 byte blocks.
+file_limit_blocks=$((MAX_BYTES / 1024 + 1))
+current_limit=$(ulimit -f)
+if [ "$current_limit" != "unlimited" ] && [ "$current_limit" -lt "$file_limit_blocks" ]; then
+  # A stricter limit is already in place, so it is kept.
+  file_limit_blocks=$current_limit
+fi
+ulimit -f "$file_limit_blocks"
+
+mkdir -p -- "$CACHE_DIR"
+cd -- "$CACHE_DIR"
 
 verify() {
   [ -f cifar-10-python.tar.gz ] \
@@ -96,7 +124,7 @@ verify() {
 
 # The last failure is reported in the error annotation, so a triage does not
 # have to guess which source failed and why.
-last_failure=''
+last_failure='the restored cache did not verify'
 
 if verify; then
   echo "CIFAR-10 archive verified from the restored cache."
@@ -117,20 +145,41 @@ else
       # TERM signal, so an attempt cannot outlive its budget. --proto and
       # --proto-redir keep the transfer on HTTPS, so a redirect cannot move
       # it into another scheme the curl build accepts by default.
-      # --max-filesize caps the transfer: the digest check runs after the
-      # download, so a broken mirror could otherwise fill the runner disk
-      # before the archive is rejected. The cap stays above the real
-      # archive, which is 170498071 bytes.
+      # -q ignores a runner wide .curlrc, which could weaken the transfer
+      # with an insecure TLS mode, a proxy or another output file. --url
+      # passes the source as a value, so a source that starts with a dash
+      # cannot be read as an option. --max-filesize stops a transfer whose
+      # announced length is above the cap; the size of the file is checked
+      # below, because a transfer without an announced length is not
+      # covered by that option.
       status=0
-      timeout --kill-after=30 "$TIMEOUT" curl -fL -C - \
+      timeout --kill-after=30 "$TIMEOUT" curl -q -fL -C - \
         --proto '=https' --proto-redir '=https' \
         --connect-timeout 30 --speed-limit 1024 --speed-time 120 \
-        --max-filesize 200000000 \
-        -o cifar-10-python.tar.gz "$url" || status=$?
+        --max-filesize "$MAX_BYTES" \
+        -o cifar-10-python.tar.gz --url "$url" || status=$?
+      size=0
+      if [ -f cifar-10-python.tar.gz ]; then
+        size=$(wc -c < cifar-10-python.tar.gz | tr -d '[:space:]')
+      fi
+      if [ "$size" -gt "$MAX_BYTES" ]; then
+        # The transfer grew past the cap, so the file is refused and
+        # dropped: a broken mirror must not fill the runner disk.
+        last_failure="${url} (transfer exceeded the size cap of ${MAX_BYTES} bytes)"
+        rm -f cifar-10-python.tar.gz
+        continue
+      fi
       if verify; then
         break 2
       fi
-      last_failure="${url} (curl exit ${status})"
+      if [ "$status" -eq 0 ]; then
+        # The transfer ended cleanly but the digest does not match: the file
+        # is complete and wrong, so the exit status of the transfer says
+        # nothing about the failure.
+        last_failure="${url} (transfer exit 0; digest mismatch)"
+      else
+        last_failure="${url} (curl exit ${status})"
+      fi
       if [ "$status" -eq 0 ] || [ "$attempt" -eq "$ATTEMPTS" ]; then
         # A transfer that ended cleanly but fails the digest is a complete,
         # wrong file: a resume would start at its end and could never repair
@@ -144,11 +193,9 @@ else
 fi
 
 if ! verify; then
-  # Every failed attempt records its source and the curl exit status, so the
-  # annotation always names the reason of the failure. The fallback covers the
-  # case where no attempt ran at all.
-  failure_detail="${last_failure:-no source was tried}"
-  echo "::error::CIFAR-10 archive could not be downloaded and verified. Last failure: $(log_safe "$failure_detail")."
+  # Every failed attempt records its source and the reason, so the
+  # annotation always names the cause of the failure.
+  echo "::error::CIFAR-10 archive could not be downloaded and verified. Last failure: $(log_safe "$last_failure")."
   exit 1
 fi
 

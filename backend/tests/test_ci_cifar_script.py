@@ -104,6 +104,15 @@ if "-C" in args:
 resume = "-C" in args and target and os.path.exists(target)
 mode = "ab" if resume else "wb"
 
+if "partialdrop" in url:
+    # A transfer that always drops half way through and fails: the source
+    # never delivers the archive, so the script has to purge the partial
+    # before it moves on to the next source.
+    remaining = data[offset:]
+    with open(target, mode) as handle:
+        handle.write(remaining[: len(remaining) // 2])
+    sys.exit(18)
+
 if "partial" in url and offset == 0:
     # A transfer that drops half way through: the first attempt delivers
     # half of the archive and fails, the way a lost connection does.
@@ -210,6 +219,7 @@ def _run_script(
     attempts: int = 2,
     stub: str = _STUB_CURL,
     timeout_stub: str | None = None,
+    max_bytes: int | None = None,
 ):
     """Runs the download script with a stubbed curl.
 
@@ -221,7 +231,8 @@ def _run_script(
     keeps the default the script pins. ``stub`` replaces the stubbed curl, so
     a test can use a stub that blocks instead of delivering the archive.
     ``timeout_stub`` replaces the ``timeout`` command, so a test can observe
-    the budget the script configured.
+    the budget the script configured. ``max_bytes`` overrides the size cap of
+    the archive, so a test can observe the refusal of an oversized transfer.
 
     Returns the completed process and the recorded curl calls.
     """
@@ -277,6 +288,8 @@ def _run_script(
         env["CIFAR10_URLS"] = "\n".join(urls)
     if fail_substring is not None:
         env["CURL_FAIL_SUBSTRING"] = fail_substring
+    if max_bytes is not None:
+        env["CIFAR10_MAX_BYTES"] = str(max_bytes)
 
     source_count = (
         len([url for url in urls if url.strip()]) if urls is not None else _default_source_count()
@@ -522,7 +535,10 @@ def test_the_script_fails_fast_and_rejects_error_pages() -> None:
     """
     text = SCRIPT.read_text()
     assert "set -euo pipefail" in text
-    assert "curl -fL" in text
+    # -q first, so a runner wide .curlrc cannot change the transfer, and -f
+    # after it, so an HTTP error page is a failed download instead of a file
+    # that is verified as broken.
+    assert "curl -q -fL" in text, f"the transfer no longer fails on an error page: {text}"
 
 
 def _load_workflow(name: str) -> dict:
@@ -1324,6 +1340,60 @@ def test_the_failure_annotation_cannot_carry_control_characters(tmp_path: Path) 
         assert "\x1b" not in line, f"a control character reached the log: {line!r}"
 
 
+def test_the_logged_source_cannot_carry_a_workflow_command_escape(tmp_path: Path) -> None:
+    """A percent escape in a source must not reach the CI log unchanged.
+
+    GitHub Actions decodes ``%0A`` and ``%0D`` inside a workflow command, so
+    a source that carries them could forge a second command. The percent
+    sign is escaped before the value is written to the log.
+    """
+    source = "https://example.test/archive%0A::error::forged"
+    process, _ = _run_script(
+        tmp_path,
+        [source],
+        fail_substring="example.test",
+    )
+
+    logged = [
+        line for line in process.stdout.splitlines() if line.startswith("Downloading CIFAR-10 from")
+    ]
+    assert logged, "the source was not logged"
+    for line in logged:
+        assert "%0A" not in line, f"a workflow command escape reached the log: {line!r}"
+        assert "%250A" in line, f"the escape was not escaped: {line!r}"
+
+    annotations = [line for line in process.stdout.splitlines() if "Last failure:" in line]
+    assert annotations, "the failure was not annotated"
+    for line in annotations:
+        assert "%0A" not in line, f"a workflow command escape reached the log: {line!r}"
+
+
+def test_a_partial_archive_of_an_exhausted_source_is_purged_before_the_next_source(
+    tmp_path: Path,
+) -> None:
+    """A source that keeps failing must not leave its partial behind.
+
+    The script resumes a partial download within the same source. When the
+    source is exhausted, the partial is dropped, so the next source starts at
+    byte zero instead of splicing two byte streams together.
+    """
+    process, calls = _run_script(
+        tmp_path,
+        ["https://example.test/partialdrop", "https://example.test/good"],
+    )
+
+    assert process.returncode == 0, process.stdout + process.stderr
+    failed_calls = [call for call in calls if call.url == "https://example.test/partialdrop"]
+    # The source was tried twice and the second attempt resumed the partial.
+    assert len(failed_calls) == 2
+    assert failed_calls[0].size == 0
+    assert failed_calls[1].size == len(PAYLOAD) // 2
+    # The next source starts from byte 0: the partial of the exhausted source
+    # was purged.
+    good_calls = [call for call in calls if call.url == "https://example.test/good"]
+    assert [call.size for call in good_calls] == [0]
+
+
 def test_every_failure_annotation_names_the_failure(tmp_path: Path) -> None:
     """Every error annotation has to name the source that failed.
 
@@ -1379,3 +1449,115 @@ def test_the_retired_cache_key_is_not_used_anywhere() -> None:
         assert not re.search(
             rf"{re.escape(retired)}(?!-v2)", text
         ), f"{name} still refers to the retired cache key"
+
+
+def test_a_transfer_without_a_declared_length_cannot_exceed_the_size_cap(
+    tmp_path: Path,
+) -> None:
+    """The size cap must hold when the server announces no length.
+
+    ``curl --max-filesize`` can only know the cap when the server sends a
+    Content-Length. A transfer that announces no length is not covered by
+    that option, so the script has to bound the file itself: an oversized
+    archive must be refused and must not stay in the cache.
+    """
+    source = "https://example.test/archive.tar.gz"
+
+    process, _ = _run_script(tmp_path, [source], max_bytes=1024)
+
+    assert process.returncode == 1, "the oversized transfer was accepted"
+    annotations = [line for line in process.stdout.splitlines() if line.startswith("::error::")]
+    assert len(annotations) == 1, f"the failure spans several lines: {process.stdout}"
+    assert "size cap" in annotations[0], f"the reason is missing: {annotations[0]}"
+    archive = tmp_path / "cache" / ARCHIVE_NAME
+    assert not archive.exists(), "the oversized archive stayed in the cache"
+
+
+def test_the_size_cap_must_be_a_positive_integer(tmp_path: Path) -> None:
+    """A size cap of zero would refuse every transfer, so it is rejected."""
+    process, _ = _run_script(tmp_path, [MIRROR_URL], max_bytes=0)
+
+    assert process.returncode == 1, "a size cap of zero was accepted"
+    assert "::error::CIFAR10_MAX_BYTES must be a" in process.stdout
+    assert "Downloading CIFAR-10 from" not in process.stdout
+
+
+def test_the_cache_restore_step_cannot_fail_the_job() -> None:
+    """A cache service error must not turn every pull request red.
+
+    The download below the restore step repairs a missing or broken cache, so
+    a cache service that answers with an error must not stop the workflow
+    before the repair can run.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        _, restore = _step_by_name(job, "Restore CIFAR-10 dataset cache")
+
+        assert (
+            restore.get("continue-on-error") is True
+        ), f"{name} can fail the job when the cache service errors"
+
+
+def test_the_curl_call_ignores_a_runner_curlrc(tmp_path: Path) -> None:
+    """A runner-wide .curlrc must not change how the archive is fetched.
+
+    A .curlrc can set options that weaken the transfer (an insecure TLS
+    mode, a proxy or an output file), so curl has to ignore it.
+    """
+    _, calls = _run_script(tmp_path, [MIRROR_URL])
+
+    assert calls, "the script did not call curl"
+    argv = calls[0].argv
+    assert argv[0] == "-q", f"curl reads the runner configuration: {argv}"
+
+
+def test_the_source_is_passed_as_a_url_option(tmp_path: Path) -> None:
+    """A source that starts with a dash must not be read as an option."""
+    source = "-Krunner-config"
+
+    _, calls = _run_script(tmp_path, [source])
+
+    assert calls, "the script did not call curl"
+    argv = calls[0].argv
+    assert "--url" in argv, f"the source is passed as a bare argument: {argv}"
+    assert argv[-1] == source, f"the source is not the url of the transfer: {argv}"
+
+
+def test_the_cache_directory_is_not_read_as_an_option() -> None:
+    """A cache directory that starts with a dash must not be an option."""
+    text = SCRIPT.read_text()
+
+    assert 'mkdir -p -- "$CACHE_DIR"' in text, "the cache directory is read as an option"
+    assert 'cd -- "$CACHE_DIR"' in text, "the cache directory is read as an option"
+
+
+def test_a_clean_but_wrong_transfer_is_named_in_the_annotation(tmp_path: Path) -> None:
+    """A transfer that ends cleanly but fails the digest is named as such.
+
+    A clean exit says nothing about the bytes that were received: the
+    archive was complete and wrong. The annotation must name that case
+    instead of the exit status of the transfer.
+    """
+    source = "https://example.test/corrupt.tar.gz"
+
+    process, _ = _run_script(tmp_path, [source])
+
+    assert process.returncode == 1, "the wrong archive was accepted"
+    annotations = [line for line in process.stdout.splitlines() if line.startswith("::error::")]
+    assert len(annotations) == 1, f"the failure spans several lines: {process.stdout}"
+    assert (
+        "transfer exit 0; digest mismatch" in annotations[0]
+    ), f"the reason is missing: {annotations[0]}"
+    assert "curl exit 0" not in annotations[0], f"the reason is misleading: {annotations[0]}"
+
+
+def test_the_failure_annotation_has_no_unreachable_fallback() -> None:
+    """The annotation names the last failure; there is no other case.
+
+    The source list always holds at least one source, so every failed
+    download records a reason and the fallback for a run without an attempt
+    can never be reached.
+    """
+    text = SCRIPT.read_text()
+
+    assert "no source was tried" not in text, "the annotation still has an unreachable fallback"
