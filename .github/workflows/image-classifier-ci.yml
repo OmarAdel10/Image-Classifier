@@ -85,6 +85,10 @@ jobs:
 
       - name: Restore CIFAR-10 dataset cache
         id: cifar-cache
+        # The cache is an optimisation: a cache service that answers with an
+        # error must not stop the workflow, because the download step below
+        # repairs a missing or broken cache.
+        continue-on-error: true
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: /home/runner/.cache/cnn-cifar10
@@ -116,7 +120,8 @@ jobs:
         # the new key, so later runs hit it exactly. Both workflows save
         # under the same immutable key, so a cold run can make the second
         # save lose the key reservation. The cache is an optimisation and
-        # not a gate, so that conflict must not fail the job.
+        # not a gate, so the save step is not allowed to turn that into a
+        # red build.
         if: success() && steps.cifar-cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
