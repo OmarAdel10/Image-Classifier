@@ -139,11 +139,11 @@ else
 fi
 
 if ! verify; then
-  if [ -n "$last_failure" ]; then
-    echo "::error::CIFAR-10 archive could not be downloaded and verified. Last failure: $(log_safe "$last_failure")."
-  else
-    echo "::error::CIFAR-10 archive could not be downloaded and verified."
-  fi
+  # Every failed attempt records its source and the curl exit status, so the
+  # annotation always names the reason of the failure. The fallback covers the
+  # case where no attempt ran at all.
+  failure_detail="${last_failure:-no source was tried}"
+  echo "::error::CIFAR-10 archive could not be downloaded and verified. Last failure: $(log_safe "$failure_detail")."
   exit 1
 fi
 

@@ -1308,3 +1308,60 @@ def test_the_failure_annotation_cannot_carry_control_characters(tmp_path: Path) 
     for line in annotations:
         assert "\x01" not in line, f"a control character reached the log: {line!r}"
         assert "\x1b" not in line, f"a control character reached the log: {line!r}"
+
+
+def test_every_failure_annotation_names_the_failure(tmp_path: Path) -> None:
+    """Every error annotation has to name the source that failed.
+
+    The script records the source and the curl exit status of every failed
+    attempt, so an annotation without that detail would leave the CI log
+    without the reason of the failure.
+    """
+    source = "https://example.test/archive"
+    process, _ = _run_script(
+        tmp_path,
+        [source],
+        fail_substring="example.test",
+    )
+
+    annotations = [line for line in process.stdout.splitlines() if line.startswith("::error::")]
+    assert annotations, "the failure was not annotated"
+    for line in annotations:
+        assert "Last failure:" in line, f"the annotation does not name the failure: {line!r}"
+
+
+def test_the_workflow_does_not_override_the_source_list_or_the_budget() -> None:
+    """The workflow may only pin the digests.
+
+    The script owns the source list, the attempt count and the download
+    budget. A workflow that overrides them would silently change where the
+    archive comes from and how long a download may take, so only the digests
+    may be pinned.
+    """
+    for name in WORKFLOW_FILES:
+        job = _backend_job(name)
+        _, download = _step_by_name(job, "Download and verify CIFAR-10")
+        env = download.get("env", {})
+
+        assert set(env) <= {
+            "CIFAR10_MD5",
+            "CIFAR10_SHA256",
+        }, f"{name} overrides more than the digests: {sorted(env)}"
+        for variable in ("CIFAR10_URLS", "CIFAR10_ATTEMPTS", "CIFAR10_TIMEOUT"):
+            assert variable not in env, f"{name} overrides {variable}"
+
+
+def test_the_retired_cache_key_is_not_used_anywhere() -> None:
+    """The poisoned cache key must not come back.
+
+    The first version of the cache key stored a truncated archive under an
+    immutable key, so the failure poisoned every later run. The live key
+    carries the -v2 suffix; the retired one must not appear in a workflow.
+    """
+    retired = "cifar10-python-md5-c58f3010"
+    for name in WORKFLOW_FILES:
+        text = (WORKFLOW_DIR / name).read_text()
+
+        assert not re.search(
+            rf"{re.escape(retired)}(?!-v2)", text
+        ), f"{name} still refers to the retired cache key"
