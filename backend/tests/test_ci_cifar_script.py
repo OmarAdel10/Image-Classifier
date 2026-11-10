@@ -1121,10 +1121,16 @@ def test_a_blank_source_list_falls_back_to_the_production_sources(
     production sources the way an empty list does. Failing instead would
     report a download error for a list that never named a source.
     """
-    for urls in (["   "], ["\n", "  \n"]):
-        process, calls = _run_script(tmp_path, urls)
+    for index, urls in enumerate((["   "], ["\n", "  \n"])):
+        # Every case gets its own work directory: a shared one keeps the
+        # verified archive of the first run, so the second case would reuse
+        # the cache and never call the mirror at all.
+        work = tmp_path / f"case_{index}"
+        work.mkdir()
+        process, calls = _run_script(work, urls)
 
         assert process.returncode == 0, process.stdout + process.stderr
+        assert calls, "the fallback sources were not tried"
         assert calls[0].url == MIRROR_URL
 
 

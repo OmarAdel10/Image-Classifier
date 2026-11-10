@@ -957,6 +957,10 @@ void main() {
       ];
 
       for (final variant in variants) {
+        // The tree is emptied first, so every variant is shown by a fresh
+        // screen and the assertions cannot read a banner of the previous
+        // variant.
+        await tester.pumpWidget(const SizedBox.shrink());
         await tester.pumpWidget(
           _buildSettingsScreen(
             http.Client(),
