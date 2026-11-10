@@ -118,7 +118,7 @@ class ApiClient {
   /// Gets model metadata from the backend.
   Future<ModelInfo> getModelInfo() async {
     final url = await baseUrl;
-    return _handleRequest(url, () async {
+    final http.Response response = await _handleRequest(url, () async {
       // The body is read through the bounded reader, so a model info response
       // that is cut short or never ends is reported the same way a prediction
       // response is: the backend answered, so the transfer failed after that.
@@ -128,17 +128,20 @@ class ApiClient {
           .timeout(_timeout);
       // The reader reports every failure of the body as the same response
       // failure, so no transport error text can reach the user.
-      final http.Response response = await _readResponseBody(
+      return _readResponseBody(
         streamedResponse,
         _remainingBudget(stopwatch),
         url,
       );
-
-      if (response.statusCode == 200) {
-        return ModelInfo.fromJson(_parseJsonMap(response.body));
-      }
-      throw _toApiException(response);
     });
+
+    // The body is read outside the transport wrapper: the backend answered,
+    // so a body that cannot be read into the expected shape is a response
+    // problem and never a transport failure.
+    if (response.statusCode == 200) {
+      return _parseResponse(response.body, url, ModelInfo.fromJson);
+    }
+    throw _toApiException(response);
   }
 
   /// Classifies an image and returns ranked predictions.
@@ -162,7 +165,7 @@ class ApiClient {
         statusCode: 400,
       );
     }
-    return _handleRequest(url, () async {
+    final http.Response response = await _handleRequest(url, () async {
       final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
         ..files.add(upload);
 
@@ -185,17 +188,20 @@ class ApiClient {
       // and then stalls would otherwise keep the request pending forever.
       // The reader reports every failure of the body as the same response
       // failure, so no transport error text can reach the user.
-      final http.Response response = await _readResponseBody(
+      return _readResponseBody(
         streamedResponse,
         _remainingBudget(stopwatch),
         url,
       );
-
-      if (response.statusCode == 200) {
-        return PredictionResponse.fromJson(_parseJsonMap(response.body));
-      }
-      throw _toApiException(response);
     });
+
+    // The body is read outside the transport wrapper: the backend answered,
+    // so a body that cannot be read into the expected shape is a response
+    // problem and never a transport failure.
+    if (response.statusCode == 200) {
+      return _parseResponse(response.body, url, PredictionResponse.fromJson);
+    }
+    throw _toApiException(response);
   }
 
   /// Predicts using an [XFile] (from image_picker/file_picker).
@@ -216,7 +222,7 @@ class ApiClient {
     String fileName,
   ) async {
     final url = await baseUrl;
-    return _handleRequest(url, () async {
+    final http.Response response = await _handleRequest(url, () async {
       final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
         ..files.add(
           http.MultipartFile.fromBytes('file', bytes, filename: fileName),
@@ -241,17 +247,20 @@ class ApiClient {
       // and then stalls would otherwise keep the request pending forever.
       // The reader reports every failure of the body as the same response
       // failure, so no transport error text can reach the user.
-      final http.Response response = await _readResponseBody(
+      return _readResponseBody(
         streamedResponse,
         _remainingBudget(stopwatch),
         url,
       );
-
-      if (response.statusCode == 200) {
-        return PredictionResponse.fromJson(_parseJsonMap(response.body));
-      }
-      throw _toApiException(response);
     });
+
+    // The body is read outside the transport wrapper: the backend answered,
+    // so a body that cannot be read into the expected shape is a response
+    // problem and never a transport failure.
+    if (response.statusCode == 200) {
+      return _parseResponse(response.body, url, PredictionResponse.fromJson);
+    }
+    throw _toApiException(response);
   }
 
   /// Releases the resources held by this client.
@@ -269,7 +278,15 @@ class ApiClient {
   /// [url] is the base URL the request targets; it is included in the error
   /// message so a connection failure points at the address that failed
   /// instead of reporting a bare "Network error".
-  Future<T> _handleRequest<T>(String url, Future<T> Function() request) async {
+  ///
+  /// The closure only sends the request and reads the body. A response that
+  /// arrives but cannot be read into the expected shape is a response
+  /// problem, so the body is parsed outside of this method and can never be
+  /// reported as a transport failure.
+  Future<http.Response> _handleRequest(
+    String url,
+    Future<http.Response> Function() request,
+  ) async {
     try {
       return await request();
     } on ApiException {
@@ -312,8 +329,9 @@ class ApiClient {
       // exception text is dropped: a custom client can carry any text in it.
       throw ApiException(message: 'Invalid request to $url.', statusCode: 502);
     } on Exception {
-      // The client failed in a way this list does not name. The request never
-      // reached an answer, so it is a transport failure. The raw error text is
+      // The client failed while the request was sent or the body was read,
+      // in a way this list does not name. The request never reached a
+      // complete answer, so it is a transport failure. The raw error text is
       // dropped: a custom client can carry any text in it.
       throw _transportFailure(url);
     } on Error {
@@ -432,6 +450,59 @@ class ApiClient {
       message: _parseErrorMessage(response.body, response.statusCode),
       statusCode: response.statusCode,
     );
+  }
+
+  /// Reads the body of a successful response into the expected shape.
+  ///
+  /// The backend answered, so a body that cannot be read is a response
+  /// problem and not a transport failure. Every failure is reported with a
+  /// fixed message, so no raw error text - an assertion message or a cast
+  /// error - can reach the user.
+  T _parseResponse<T>(
+    String body,
+    String url,
+    T Function(Map<String, dynamic>) fromJson,
+  ) {
+    final Map<String, dynamic> json;
+    try {
+      json = _parseJsonMap(body);
+    } on FormatException {
+      throw ApiException(
+        message:
+            'Invalid response from $url. '
+            'The response could not be parsed as the expected JSON.',
+        statusCode: 502,
+      );
+    }
+    try {
+      return fromJson(json);
+    } on TypeError {
+      throw ApiException(
+        message:
+            'Invalid response from $url: unexpected response shape. '
+            'Is the backend the image classifier API?',
+        statusCode: 502,
+      );
+    } on Exception {
+      // The body has the JSON shape the model expects, but the model cannot
+      // read it - for example because a value is outside its range. The
+      // failure is still a response problem.
+      throw ApiException(
+        message:
+            'Invalid response from $url: unexpected response shape. '
+            'Is the backend the image classifier API?',
+        statusCode: 502,
+      );
+    } on Error {
+      // The same holds for an error that is not an exception, such as the
+      // assertion that guards the confidence range.
+      throw ApiException(
+        message:
+            'Invalid response from $url: unexpected response shape. '
+            'Is the backend the image classifier API?',
+        statusCode: 502,
+      );
+    }
   }
 
   dynamic _parseJson(String body) {

@@ -1399,6 +1399,41 @@ void main() {
           },
         );
       }
+
+      test('a response that cannot be read into the expected shape is a response problem', () async {
+        // The backend answered with a body the model cannot read: the
+        // confidence is outside the range the model guards. The status line
+        // arrived, so this is a response problem and not a transport
+        // failure.
+        final apiClient = ApiClient(
+          client: MockClient(
+            (request) async => http.Response(
+              '{"predictions":[{"class_name":"cat","confidence":1.5}],'
+              '"latency_ms":10,"model":"resnet18"}',
+              200,
+            ),
+          ),
+        );
+
+        await expectLater(
+          apiClient.predictBytes(Uint8List.fromList([1, 2, 3]), 'image.png'),
+          throwsA(
+            isA<ApiException>()
+                .having((e) => e.statusCode, 'statusCode', 502)
+                .having(
+                  (e) => e.message,
+                  'message',
+                  allOf(
+                    contains('Invalid response from'),
+                    // The backend answered, so the connection was fine.
+                    isNot(contains('Cannot reach')),
+                    // The raw error text must not reach the screen.
+                    isNot(contains('confidence out of')),
+                  ),
+                ),
+          ),
+        );
+      });
     });
 
     test('dispose leaves a caller owned client usable', () async {
