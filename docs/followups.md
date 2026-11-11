@@ -613,10 +613,13 @@ matching Plane work item.
 - **Finding:** The rejection message names the limit as `10485760 byte
   limit`, which the user has to convert by hand.
 - **Fix:** Render the limit in MiB.
-- **Delivered by PR #30 (round 32):** the message now names the limit as a
-  byte count (`the compressed image is larger than the $maxBytes byte limit`),
-  so the rejected image and the limit are both stated; the unit conversion is
-  still open.
+- **Delivered by PR #30 (round 32):** the compressed-size message now names
+  the limit as a byte count (`the compressed image is larger than the
+  $maxBytes byte limit`), so the rejected image and the limit are both
+  stated; the unit conversion is still open.
+- **Delivered by PR #30 (round 33):** the pixel-cap message also names the
+  limit as a count (`the image is too large to decode` with a configurable
+  `maxDecodedPixels` parameter).
 
 ## REGISTER-POLISH — the register and the contract harness need polish
 
@@ -643,3 +646,91 @@ matching Plane work item.
   gate keeps the content safe, so the exposure is availability only.
 - **Fix:** Resolve the redirect chain first and allow only the known mirror
   hosts, then fetch the archive from an allowed host.
+
+## DECOMPRESSION-BOMB — client decodes before any pixel cap
+
+- **Plane:** IC-114
+- **Location:** `lib/services/image_service.dart` (`_decodeImage`, lines ~99,
+  ~151–175)
+- **Finding:** A malicious or broken image that declares extreme dimensions
+  (e.g. 20000×20000 = 400 MP) causes the image package to allocate a pixel
+  buffer of ~1.6 GB on the main isolate before the package's own 2^28 cap
+  rejects it. The package does cap but its default is far above the service's
+  actual need (1024 px). The exception is an `ImageException` that would
+  escape the service as a raw package error.
+- **Fix:** Peek dimensions from the header via `startDecode` and reject
+  `width*height > 50 MP` before `decode` allocates; convert any
+  `ImageException` into the fixed `ImageValidationException` message.
+- **Delivered by PR #30 (round 33):** the service now header-peeks with a
+  configurable `maxDecodedPixels` cap (default 50 MP) and catches
+  `ImageException` to emit the safe message.
+
+## STALE-ERROR-GUARDS-COVERAGE — stale error arms never exercised
+
+- **Plane:** IC-115
+- **Location:** `lib/providers/prediction_provider.dart:67,72,77` (the
+  `on ApiException`, `on Exception`, `on TypeError`, `on Error` catch arms
+  inside `predict()`)
+- **Finding:** All existing stale-answer tests complete the pending request
+  with a *successful* response. The guards that drop a stale *error* were
+  never tested, so a regression there would ship silently.
+- **Fix:** Add tests that complete the pending future with an error after
+  `clear()` (or a newer `predict()`) and assert the state remains
+  `PredictionStateIdle`.
+- **Delivered by PR #30 (round 33):** two new tests exercise the
+  `ApiException` and `Error` stale paths; both pass.
+
+## ERROR-DETAIL-BIDI — backend detail may carry bidi/zero-width chars
+
+- **Plane:** IC-116
+- **Location:** `lib/services/api_client.dart:596-601, 612-621` (the
+  `_sanitizeErrorMessage` path that propagates the backend's `detail` field)
+- **Finding:** The backend's `detail` string can contain Unicode
+  bidi-override (U+202E) or zero-width (Cf-category) characters that spoof
+  the visible banner text (CWE-451). ESC/ANSI is already stripped.
+- **Fix:** Strip/replace Cf-format characters in `_sanitizeErrorMessage`.
+
+## BYTE-UPLOAD-CAP — upload budget only enforced in ImageService
+
+- **Plane:** IC-117
+- **Location:** `lib/services/api_client.dart` (~line 180 `predict`, ~line
+  245 `predictBytes`)
+- **Finding:** The 10 MiB upload cap is enforced only in `ImageService`;
+  `ApiClient` trusts its callers. The backend has its own cap, so impact is
+  bounded, but defense-in-depth is missing.
+- **Fix:** Check `file.lengthSync()`/`bytes.length` against
+  `Config.maxImageSizeBytes` at the top of both methods.
+
+## DIGEST-TOCTOU — digest verify not atomic with use
+
+- **Plane:** IC-118
+- **Location:** `backend/scripts/fetch_cifar10.sh:119-123, 202-203`
+- **Finding:** The script hashes the restored archive to a file, then the
+  consumer step re-reads it; a concurrent writer could swap the file
+  between the two reads (CWE-367). No concurrent writer exists on GitHub
+  runners, so this is a hardening note only.
+- **Fix:** Hash once into a variable and string-compare, or hash inside the
+  consumer step.
+
+## HEALTH-STALLED-BODY — health probe body release untested
+
+- **Plane:** IC-119
+- **Location:** `lib/services/api_client.dart:134, 466-472`
+- **Finding:** The health-check body release was changed to `send()` +
+  bounded `finally` release, but no test asserts a never-ending health
+  body cannot keep the probe pending (stalled fakes only wired to
+  `getModelInfo`).
+- **Fix:** Wire the never-releasing fake to `healthStatusCode()`; assert
+  prompt return + body never subscribed.
+
+## API-CLIENT-FLAKY-SOCKET — socket-failure test flakes
+
+- **Plane:** IC-113
+- **Location:** `test/api_client_base_url_test.dart` (`predict names the URL
+  when the socket fails`)
+- **Finding:** The test failed once in a full suite run (exit code 1), passed
+  in isolation (31/31), and passed on the next full run. No code change
+  triggered it; likely a race between the mock client's socket-error
+  completion and the test's expectation timing.
+- **Fix:** Investigate the mock timing; if unreproducible, mark
+  `flaky:true` in the test metadata or strengthen the assertion window.
