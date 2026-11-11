@@ -263,5 +263,45 @@ void main() {
       await future;
       expect(provider.state, isA<PredictionStateIdle>());
     });
+
+    test(
+      'a stale error after clear() does not overwrite the idle state',
+      () async {
+        // clear() invalidates the in-flight prediction: its late failure must
+        // not replace the idle state the user asked for.
+        final pending = Completer<PredictionResponse>();
+        when(mockApiClient.predictXFile(any)).thenAnswer((_) => pending.future);
+
+        final future = provider.predict(XFile('late.png'));
+        expect(provider.state, isA<PredictionStateLoading>());
+
+        provider.clear();
+        expect(provider.state, isA<PredictionStateIdle>());
+
+        // The stale failure arrives after the clear and must be dropped.
+        pending.completeError(
+          const ApiException(message: 'gone', statusCode: 503),
+        );
+        await future;
+        expect(provider.state, isA<PredictionStateIdle>());
+      },
+    );
+
+    test('a stale unexpected error after clear() does not overwrite the idle state', () async {
+      // The generic Error arm carries the same guard: a stale failure must
+      // not replace the idle state the user asked for.
+      final pending = Completer<PredictionResponse>();
+      when(mockApiClient.predictXFile(any)).thenAnswer((_) => pending.future);
+
+      final future = provider.predict(XFile('late.png'));
+      expect(provider.state, isA<PredictionStateLoading>());
+
+      provider.clear();
+      expect(provider.state, isA<PredictionStateIdle>());
+
+      pending.completeError(StateError('boom'));
+      await future;
+      expect(provider.state, isA<PredictionStateIdle>());
+    });
   });
 }
