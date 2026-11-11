@@ -79,12 +79,21 @@ class MockImageService extends _i1.Mock implements _i7.ImageService {
   _i8.Future<_i2.File> validateAndCompress(
     _i2.File? file, {
     int? maxBytes = 10485760,
+    int? maxDecodedPixels = 50000000,
   }) => (super.noSuchMethod(
-    Invocation.method(#validateAndCompress, [file], {#maxBytes: maxBytes}),
+    Invocation.method(
+      #validateAndCompress,
+      [file],
+      {#maxBytes: maxBytes, #maxDecodedPixels: maxDecodedPixels},
+    ),
     returnValue: _i8.Future<_i2.File>.value(
       _FakeFile_0(
         this,
-        Invocation.method(#validateAndCompress, [file], {#maxBytes: maxBytes}),
+        Invocation.method(
+          #validateAndCompress,
+          [file],
+          {#maxBytes: maxBytes, #maxDecodedPixels: maxDecodedPixels},
+        ),
       ),
     ),
   ) as _i8.Future<_i2.File>);

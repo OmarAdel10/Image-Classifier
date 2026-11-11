@@ -34,6 +34,16 @@ class ImageService {
 
   final PickFile _picker;
 
+  /// The largest number of pixels the service will decode.
+  ///
+  /// The image package caps a decode at 2^28 pixels (about 268 million),
+  /// which still allows a pixel buffer of roughly a gigabyte on the main
+  /// isolate. The upload only needs 1024 px, so the service sits far below
+  /// the package default: a hostile or broken file that declares more
+  /// pixels than this is rejected from its header, before the decoder
+  /// allocates anything.
+  static const int defaultMaxDecodedPixels = 50 * 1000 * 1000;
+
   /// Picks an image from the gallery or file system.
   /// Returns the picked image file, or null if cancelled.
   Future<XFile?> pickImage() async {
@@ -72,6 +82,7 @@ class ImageService {
   /// Checks:
   /// - File size <= [maxBytes]
   /// - Valid image format (PNG, JPEG)
+  /// - Declared pixel count <= [maxDecodedPixels]
   /// - Resizes if dimensions exceed 1024px
   /// - Re-encodes as JPEG at 85% quality
   ///
@@ -80,11 +91,16 @@ class ImageService {
   /// that the limit can be lowered in a test, where the compressed size
   /// cannot be made to exceed the shipped limit.
   ///
+  /// [maxDecodedPixels] defaults to [defaultMaxDecodedPixels] and is a
+  /// parameter so that the cap can be lowered in a test, where no realistic
+  /// image can be built above the shipped limit.
+  ///
   /// Returns the compressed image file.
   /// Throws [ImageValidationException] if validation fails.
   Future<File> validateAndCompress(
     File file, {
     int maxBytes = Config.maxImageSizeBytes,
+    int maxDecodedPixels = defaultMaxDecodedPixels,
   }) async {
     // Check file size
     final fileSize = await file.length();
@@ -96,7 +112,7 @@ class ImageService {
 
     // Read and decode image
     final bytes = await file.readAsBytes();
-    final image = img.decodeImage(bytes);
+    final image = _decodeImage(bytes, maxDecodedPixels);
 
     if (image == null) {
       throw ImageValidationException(
@@ -130,6 +146,34 @@ class ImageService {
     await outputFile.writeAsBytes(jpegBytes);
 
     return outputFile;
+  }
+
+  /// Decodes [bytes] under the [maxPixels] pixel cap.
+  ///
+  /// The dimensions are read from the file header first, so a file that
+  /// declares more than [maxPixels] pixels is rejected before the decoder
+  /// allocates a pixel buffer. A malformed or oversized file makes the
+  /// decoder throw, so every package error becomes the fixed rejection
+  /// message: a raw package exception never leaves this method.
+  img.Image? _decodeImage(Uint8List bytes, int maxPixels) {
+    try {
+      final decoder = img.findDecoderForData(bytes);
+      if (decoder == null) {
+        return null;
+      }
+      final info = decoder.startDecode(bytes);
+      if (info == null) {
+        return null;
+      }
+      if (info.width * info.height > maxPixels) {
+        throw ImageValidationException('the image is too large to decode');
+      }
+      return decoder.decode(bytes);
+    } on img.ImageException {
+      throw const ImageValidationException(
+        'the file is not a valid PNG or JPEG image',
+      );
+    }
   }
 
   /// Checks if bytes represent a PNG file.
