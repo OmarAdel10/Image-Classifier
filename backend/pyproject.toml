@@ -12,7 +12,9 @@ dependencies = [
     # (weights_only=True RCE, GHSA-53q9-r3pm-6pq6)
     "torch>=2.6.0,<3.0.0",
     "torchvision>=0.21.0,<1.0.0",
-    "pillow>=10.4.0,<13.0.0",
+    # pillow>=11.3.0: first release with the CVE-2025-48379 fix (heap buffer
+    # overflow when writing a DDS image); the 10.x line is end-of-life.
+    "pillow>=11.3.0,<13.0.0",
     # Required by FastAPI for multipart/form-data uploads (/predict).
     "python-multipart>=0.0.18,<1.0.0",
     # Rate limiting for /predict endpoint (DoS mitigation).
@@ -27,6 +29,8 @@ dev = [
     "httpx>=0.26.0,<1.0.0",
     "ruff>=0.1.0,<1.0.0",
     "black>=23.0.0,<27.0.0",
+    # The CI workflow contract is asserted by parsing the workflow YAML.
+    "pyyaml>=6.0,<7.0.0",
 ]
 
 [build-system]

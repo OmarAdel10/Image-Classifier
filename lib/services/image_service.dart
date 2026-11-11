@@ -9,6 +9,20 @@ import 'package:image_picker/image_picker.dart';
 /// Type alias for the image picker function to enable testing.
 typedef PickFile = Future<XFile?> Function();
 
+/// Thrown when a picked file cannot be used as an image.
+///
+/// The [message] is written for the user, so it can be shown as is. Any
+/// other exception keeps its own text, which must never reach the UI.
+class ImageValidationException implements Exception {
+  const ImageValidationException(this.message);
+
+  /// The human readable reason why the file was rejected.
+  final String message;
+
+  @override
+  String toString() => 'ImageValidationException: $message';
+}
+
 /// Service for picking and validating/compressing images.
 class ImageService {
   /// Creates an [ImageService] with an optional [picker] for testing.
@@ -19,6 +33,16 @@ class ImageService {
   ImageService({PickFile? picker}) : _picker = picker ?? _defaultPicker;
 
   final PickFile _picker;
+
+  /// The largest number of pixels the service will decode.
+  ///
+  /// The image package caps a decode at 2^28 pixels (about 268 million),
+  /// which still allows a pixel buffer of roughly a gigabyte on the main
+  /// isolate. The upload only needs 1024 px, so the service sits far below
+  /// the package default: a hostile or broken file that declares more
+  /// pixels than this is rejected from its header, before the decoder
+  /// allocates anything.
+  static const int defaultMaxDecodedPixels = 50 * 1000 * 1000;
 
   /// Picks an image from the gallery or file system.
   /// Returns the picked image file, or null if cancelled.
@@ -56,37 +80,51 @@ class ImageService {
   /// Validates and compresses an image file for upload.
   ///
   /// Checks:
-  /// - File size <= [Config.maxImageSizeBytes]
+  /// - File size <= [maxBytes]
   /// - Valid image format (PNG, JPEG)
+  /// - Declared pixel count <= [maxDecodedPixels]
   /// - Resizes if dimensions exceed 1024px
   /// - Re-encodes as JPEG at 85% quality
   ///
+  /// [maxBytes] is the limit for the input file and for the compressed
+  /// result. It defaults to [Config.maxImageSizeBytes] and is a parameter so
+  /// that the limit can be lowered in a test, where the compressed size
+  /// cannot be made to exceed the shipped limit.
+  ///
+  /// [maxDecodedPixels] defaults to [defaultMaxDecodedPixels] and is a
+  /// parameter so that the cap can be lowered in a test, where no realistic
+  /// image can be built above the shipped limit.
+  ///
   /// Returns the compressed image file.
-  /// Throws [StateError] if validation fails.
-  Future<File> validateAndCompress(File file) async {
+  /// Throws [ImageValidationException] if validation fails.
+  Future<File> validateAndCompress(
+    File file, {
+    int maxBytes = Config.maxImageSizeBytes,
+    int maxDecodedPixels = defaultMaxDecodedPixels,
+  }) async {
     // Check file size
     final fileSize = await file.length();
-    if (fileSize > Config.maxImageSizeBytes) {
-      throw StateError(
-        'File size ${fileSize}B exceeds maximum ${Config.maxImageSizeBytes}B',
+    if (fileSize > maxBytes) {
+      throw ImageValidationException(
+        'the file is larger than the $maxBytes byte limit',
       );
     }
 
     // Read and decode image
     final bytes = await file.readAsBytes();
-    final image = img.decodeImage(bytes);
+    final image = _decodeImage(bytes, maxDecodedPixels);
 
     if (image == null) {
-      throw StateError('Invalid image format or corrupted file');
+      throw ImageValidationException(
+        'the file is not a valid PNG or JPEG image',
+      );
     }
 
     // Check format
     final isPng = _isPng(bytes);
     final isJpeg = _isJpeg(bytes);
     if (!isPng && !isJpeg) {
-      throw StateError(
-        'Unsupported image format. Only PNG and JPEG are allowed.',
-      );
+      throw ImageValidationException('only PNG and JPEG images are supported');
     }
 
     // Resize if needed (max dimension 1024)
@@ -96,8 +134,10 @@ class ImageService {
     final jpegBytes = img.encodeJpg(resized, quality: 85);
 
     // Check compressed size
-    if (jpegBytes.length > Config.maxImageSizeBytes) {
-      throw StateError('Compressed image exceeds maximum size');
+    if (jpegBytes.length > maxBytes) {
+      throw ImageValidationException(
+        'the compressed image is larger than the $maxBytes byte limit',
+      );
     }
 
     // Write to temp file
@@ -106,6 +146,34 @@ class ImageService {
     await outputFile.writeAsBytes(jpegBytes);
 
     return outputFile;
+  }
+
+  /// Decodes [bytes] under the [maxPixels] pixel cap.
+  ///
+  /// The dimensions are read from the file header first, so a file that
+  /// declares more than [maxPixels] pixels is rejected before the decoder
+  /// allocates a pixel buffer. A malformed or oversized file makes the
+  /// decoder throw, so every package error becomes the fixed rejection
+  /// message: a raw package exception never leaves this method.
+  img.Image? _decodeImage(Uint8List bytes, int maxPixels) {
+    try {
+      final decoder = img.findDecoderForData(bytes);
+      if (decoder == null) {
+        return null;
+      }
+      final info = decoder.startDecode(bytes);
+      if (info == null) {
+        return null;
+      }
+      if (info.width * info.height > maxPixels) {
+        throw ImageValidationException('the image is too large to decode');
+      }
+      return decoder.decode(bytes);
+    } on img.ImageException {
+      throw const ImageValidationException(
+        'the file is not a valid PNG or JPEG image',
+      );
+    }
   }
 
   /// Checks if bytes represent a PNG file.

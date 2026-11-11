@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mockito/annotations.dart';
@@ -83,7 +85,72 @@ void main() {
 
       expect(provider.state, isA<PredictionStateError>());
       final errorState = provider.state as PredictionStateError;
-      expect(errorState.message, contains('network error'));
+      // The failure is reported with a fixed message: the raw text of the
+      // exception is not shown to the user.
+      expect(errorState.message, 'The prediction failed.');
+      expect(errorState.message, isNot(contains('network error')));
+      expect(errorState.message, isNot(contains('Exception')));
+    });
+
+    test('predict sets state to error on a thrown Error (TypeError)', () async {
+      final file = XFile('test.png');
+
+      when(mockApiClient.predictXFile(any))
+          .thenAnswer((_) => Future.error(TypeError()));
+
+      final future = provider.predict(file);
+
+      await future;
+
+      expect(provider.state, isA<PredictionStateError>());
+      final errorState = provider.state as PredictionStateError;
+      // The raw error text is not shown to the user, but the failure is
+      // still reported instead of leaving the UI in the loading state.
+      expect(
+        errorState.message,
+        'The backend returned an unexpected response.',
+      );
+      expect(errorState.message, isNot(contains('TypeError')));
+    });
+
+    test('predict reports an unexpected Error without its raw text', () async {
+      final file = XFile('test.png');
+
+      when(mockApiClient.predictXFile(any))
+          .thenAnswer((_) => Future.error(StateError('internal detail')));
+
+      final future = provider.predict(file);
+
+      await future;
+
+      expect(provider.state, isA<PredictionStateError>());
+      final errorState = provider.state as PredictionStateError;
+      expect(
+        errorState.message,
+        'The prediction failed with an unexpected error.',
+      );
+      expect(errorState.message, isNot(contains('internal detail')));
+      expect(errorState.message, isNot(contains('StateError')));
+    });
+
+    test('predict sets state to error on an ArgumentError', () async {
+      final file = XFile('test.png');
+
+      when(mockApiClient.predictXFile(any))
+          .thenAnswer((_) => Future.error(ArgumentError('bad shape')));
+
+      final future = provider.predict(file);
+
+      await future;
+
+      expect(provider.state, isA<PredictionStateError>());
+      final errorState = provider.state as PredictionStateError;
+      // The failure is reported, but the raw error text is not shown.
+      expect(
+        errorState.message,
+        'The prediction failed with an unexpected error.',
+      );
+      expect(errorState.message, isNot(contains('bad shape')));
     });
 
     test('clear resets state to idle', () async {
@@ -127,6 +194,114 @@ void main() {
 
       // Should end up with result from last call
       expect(provider.state, isA<PredictionStateResult>());
+    });
+
+    test(
+      'a prediction that answers late does not overwrite a newer one',
+      () async {
+        // The first request answers after the second one. The newer request
+        // owns the state, so the late answer has to be dropped.
+        final first = Completer<PredictionResponse>();
+        final second = Completer<PredictionResponse>();
+        final firstResponse = PredictionResponse(
+          predictions: [PredictionItem(className: 'cat', confidence: 0.9)],
+          latencyMs: 1.0,
+          model: 'first',
+        );
+        final secondResponse = PredictionResponse(
+          predictions: [PredictionItem(className: 'dog', confidence: 0.8)],
+          latencyMs: 2.0,
+          model: 'second',
+        );
+
+        when(mockApiClient.predictXFile(any)).thenAnswer((invocation) {
+          final file = invocation.positionalArguments.first as XFile;
+          return file.path.contains('first') ? first.future : second.future;
+        });
+
+        final future1 = provider.predict(XFile('first.png'));
+        final future2 = provider.predict(XFile('second.png'));
+
+        // The newer request answers first.
+        second.complete(secondResponse);
+        await future2;
+        expect(
+          (provider.state as PredictionStateResult).response.model,
+          'second',
+        );
+
+        // The older request answers late and must not change the state.
+        first.complete(firstResponse);
+        await future1;
+        expect(
+          (provider.state as PredictionStateResult).response.model,
+          'second',
+        );
+      },
+    );
+
+    test('a prediction that answers after clear() does not overwrite the idle state', () async {
+      // clear() invalidates the in-flight prediction: its late answer must
+      // not replace the idle state the user asked for.
+      final pending = Completer<PredictionResponse>();
+      final lateResponse = PredictionResponse(
+        predictions: [PredictionItem(className: 'cat', confidence: 0.9)],
+        latencyMs: 1.0,
+        model: 'late',
+      );
+
+      when(mockApiClient.predictXFile(any)).thenAnswer((_) => pending.future);
+
+      final future = provider.predict(XFile('late.png'));
+      expect(provider.state, isA<PredictionStateLoading>());
+
+      provider.clear();
+      expect(provider.state, isA<PredictionStateIdle>());
+
+      // The stale answer arrives after the clear and must be dropped.
+      pending.complete(lateResponse);
+      await future;
+      expect(provider.state, isA<PredictionStateIdle>());
+    });
+
+    test(
+      'a stale error after clear() does not overwrite the idle state',
+      () async {
+        // clear() invalidates the in-flight prediction: its late failure must
+        // not replace the idle state the user asked for.
+        final pending = Completer<PredictionResponse>();
+        when(mockApiClient.predictXFile(any)).thenAnswer((_) => pending.future);
+
+        final future = provider.predict(XFile('late.png'));
+        expect(provider.state, isA<PredictionStateLoading>());
+
+        provider.clear();
+        expect(provider.state, isA<PredictionStateIdle>());
+
+        // The stale failure arrives after the clear and must be dropped.
+        pending.completeError(
+          const ApiException(message: 'gone', statusCode: 503),
+        );
+        await future;
+        expect(provider.state, isA<PredictionStateIdle>());
+      },
+    );
+
+    test('a stale unexpected error after clear() does not overwrite the idle state', () async {
+      // The generic Error arm carries the same guard: a stale failure must
+      // not replace the idle state the user asked for.
+      final pending = Completer<PredictionResponse>();
+      when(mockApiClient.predictXFile(any)).thenAnswer((_) => pending.future);
+
+      final future = provider.predict(XFile('late.png'));
+      expect(provider.state, isA<PredictionStateLoading>());
+
+      provider.clear();
+      expect(provider.state, isA<PredictionStateIdle>());
+
+      pending.completeError(StateError('boom'));
+      await future;
+      expect(provider.state, isA<PredictionStateIdle>());
     });
   });
 }

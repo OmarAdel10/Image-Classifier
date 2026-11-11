@@ -4,10 +4,41 @@ import 'package:provider/provider.dart';
 import 'package:image_classifier/config.dart';
 import 'package:image_classifier/services/api_client.dart';
 
+/// Shortens an address for a banner.
+///
+/// The field accepts anything the user types, so the address is stripped of
+/// control characters and shortened before it reaches a message. A banner
+/// stays readable and cannot carry a pasted payload. The credentials of an
+/// address are removed as well, so a banner never repeats a secret.
+/// The address as it is shown in a banner.
+///
+/// A credential is removed from the address: the banner is shown on screen
+/// and written to logs, so a password must not be part of it. The removal
+/// works on the authority (the part between the scheme and the path), and the
+/// last at sign wins, so a password that carries an at sign cannot hide the
+/// host or leave the tail of the password behind.
+String _displayUrl(String url) {
+  final cleaned = url.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
+  // The pattern matches every string: the scheme is optional and the
+  // authority may be empty.
+  final match = RegExp(r'^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)')
+      .firstMatch(cleaned)!;
+  final scheme = match.group(1) ?? '';
+  final authority = match.group(2) ?? '';
+  final at = authority.lastIndexOf('@');
+  final sanitized = at < 0
+      ? cleaned
+      : '$scheme${authority.substring(at + 1)}'
+            '${cleaned.substring(match.end)}';
+  if (sanitized.length <= 120) return sanitized;
+  return '${sanitized.substring(0, 119)}…';
+}
+
 /// Screen for configuring the backend API base URL at runtime.
 ///
-/// The compile-time `--dart-define=API_BASE_URL` override always wins; the
-/// value entered here is used only when no compile-time override is present.
+/// The compile-time `--dart-define=API_BASE_URL` override always wins. When it
+/// is present the field is used only for Test Connection and Save is disabled,
+/// so a runtime value cannot be stored and later activate in an unpinned build.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     super.key,
@@ -17,7 +48,7 @@ class SettingsScreen extends StatefulWidget {
   /// Compile-time `--dart-define=API_BASE_URL` value in effect for this app.
   ///
   /// Defaults to [Config.compileTimeApiBaseUrl]; tests inject a value to
-  /// verify that the screen warns when the runtime value is overridden.
+  /// verify the pinned-build behavior.
   final String compileTimeOverride;
 
   @override
@@ -29,6 +60,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _testing = false;
   String? _statusMessage;
   bool _statusIsError = false;
+
+  bool get _pinned => widget.compileTimeOverride.isNotEmpty;
 
   @override
   void initState() {
@@ -48,7 +81,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       compileTimeOverride: widget.compileTimeOverride,
     );
     if (!mounted) return;
-    _controller.text = url;
+    // Do not clobber anything the user typed while storage was resolving.
+    if (_controller.text.isEmpty) {
+      _controller.text = url;
+    }
     setState(() {});
   }
 
@@ -62,53 +98,94 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return null;
   }
 
+  /// Renders an error for the user without the raw Dart exception wrapper.
+  ///
+  /// Only a configuration error carries a message that is safe to show: it is
+  /// written by hand in `config.dart` and never repeats a path, a credential
+  /// or the text of another exception. Every other error is reported as an
+  /// unexpected failure, because its own text can carry internal details that
+  /// do not belong on the screen. A missing provider is reported with its own
+  /// text, because it names the provider the screen needs.
+  static String _describeError(Object error) {
+    if (error is ApiConfigError) return error.message;
+    if (error is ProviderNotFoundException) return error.toString();
+    return 'an unexpected error occurred';
+  }
+
   Future<void> _testConnection() async {
-    final url = _controller.text.trim();
+    final url = Config.normalizeApiBaseUrl(_controller.text);
 
     setState(() {
       _testing = true;
       _statusMessage = null;
     });
 
-    // Capture the client before the async gap so no BuildContext is used
-    // after an await.
-    final httpClient = context.read<ApiClient>().client;
+    try {
+      // Read the client inside the try so a missing provider is reported to
+      // the user instead of escaping the handler. No BuildContext is used
+      // after an await.
+      final httpClient = context.read<ApiClient>().client;
 
-    // Probe the URL as typed, without disturbing the stored configuration.
-    final probe = ApiClient(client: httpClient, baseUrl: url);
-    final statusCode = await probe.healthStatusCode();
+      // Probe the URL as typed, without disturbing the stored configuration.
+      final probe = ApiClient(client: httpClient, baseUrl: url);
+      final statusCode = await probe.healthStatusCode();
 
-    if (!mounted) return;
-    setState(() {
-      _testing = false;
-      if (statusCode == 200) {
-        _statusIsError = false;
-        _statusMessage = 'Connected to $url';
-      } else if (statusCode != null) {
+      if (!mounted) return;
+      setState(() {
+        if (statusCode == 200) {
+          _statusIsError = false;
+          _statusMessage = 'Connected to ${_displayUrl(url)}';
+        } else if (statusCode != null) {
+          _statusIsError = true;
+          _statusMessage =
+              'Reached ${_displayUrl(url)}, but /health returned HTTP '
+              '$statusCode. '
+              'The backend is running but not healthy.';
+        } else {
+          _statusIsError = true;
+          _statusMessage =
+              'Could not reach ${_displayUrl(url)} — is the backend running?';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
         _statusIsError = true;
+        // The probe never raises an ApiException: healthStatusCode() reports
+        // an unreachable backend as a null status code instead of throwing.
+        // The generic renderer therefore names the actual cause.
         _statusMessage =
-            'Reached $url, but /health returned HTTP $statusCode. '
-            'The backend is running but not healthy.';
-      } else {
-        _statusIsError = true;
-        _statusMessage = 'Could not reach $url — is the backend running?';
+            'Could not test ${_displayUrl(url)}: ${_describeError(e)}';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _testing = false);
       }
-    });
+    }
   }
 
   Future<void> _save() async {
     final url = Config.normalizeApiBaseUrl(_controller.text);
     if (_validate(url) != null) return;
 
-    final apiClient = context.read<ApiClient>();
+    final override = widget.compileTimeOverride;
 
+    ApiClient? apiClient;
     try {
-      await Config.setApiBaseUrl(url);
+      // Read the client inside the try so a missing provider is reported to
+      // the user instead of escaping the handler.
+      apiClient = context.read<ApiClient>();
+      await Config.setApiBaseUrl(url, compileTimeOverride: override);
     } catch (e) {
+      // Config restores the persisted URL after a refused write, so the
+      // client cache is dropped here as well: the next request has to
+      // re-resolve the URL that is actually stored.
+      apiClient?.invalidateBaseUrlCache();
       if (!mounted) return;
       setState(() {
         _statusIsError = true;
-        _statusMessage = 'Could not save $url: $e';
+        _statusMessage =
+            'Could not save ${_displayUrl(url)}: ${_describeError(e)}';
       });
       return;
     }
@@ -116,24 +193,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
     apiClient.invalidateBaseUrlCache();
     if (!mounted) return;
     setState(() {
-      final override = widget.compileTimeOverride;
-      if (override.isNotEmpty) {
-        _statusIsError = true;
-        _statusMessage =
-            'Stored $url, but --dart-define=API_BASE_URL=$override '
-            'overrides it at runtime.';
-      } else {
-        _statusIsError = false;
-        _statusMessage = 'Saved. Using $url';
-      }
+      _statusIsError = false;
+      _statusMessage = 'Saved. Using ${_displayUrl(url)}';
     });
   }
 
   Future<void> _resetToDefault() async {
-    final apiClient = context.read<ApiClient>();
+    late final ApiClient apiClient;
+    try {
+      // Read the client inside the try so a missing provider is reported to
+      // the user instead of escaping the handler.
+      apiClient = context.read<ApiClient>();
+    } catch (e) {
+      // The read is synchronous, so the screen is still mounted here and the
+      // banner can be written without a guard.
+      setState(() {
+        _statusIsError = true;
+        _statusMessage = 'Could not reset the stored URL: ${_describeError(e)}';
+      });
+      return;
+    }
 
-    await Config.clearApiBaseUrl();
+    final cleared = await Config.clearApiBaseUrl();
     apiClient.invalidateBaseUrlCache();
+    if (!mounted) return;
+    if (!cleared) {
+      setState(() {
+        _statusIsError = true;
+        // The in-memory cache is cleared even when the platform refused the
+        // removal, so the stored URL is not active now - but the platform may
+        // still hold it and restore it after a restart.
+        _statusMessage =
+            'Could not remove the stored URL - it is not active now, '
+            'but it may return after a restart.';
+      });
+      return;
+    }
     final url = await Config.resolveApiBaseUrl(
       compileTimeOverride: widget.compileTimeOverride,
     );
@@ -142,9 +237,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final override = widget.compileTimeOverride;
       _statusIsError = false;
       _statusMessage = override.isNotEmpty
-          ? 'Cleared the stored URL; --dart-define=API_BASE_URL=$override '
-                'still applies.'
-          : 'Reset to default ($url)';
+          ? 'Cleared the stored URL; --dart-define=API_BASE_URL='
+                '${_displayUrl(override)} still applies.'
+          : 'Reset to default (${_displayUrl(url)})';
     });
     _controller.text = url;
   }
@@ -166,10 +261,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             'and /predict.',
             style: theme.textTheme.bodySmall,
           ),
+          if (_pinned) ...[
+            const SizedBox(height: 12),
+            _PinnedBanner(compileTimeOverride: widget.compileTimeOverride),
+          ],
           const SizedBox(height: 16),
           TextField(
             controller: _controller,
-            onChanged: (_) => setState(() {}),
+            onChanged: (_) => setState(() {
+              // The banner described the previous value; do not keep claiming
+              // it is connected while the field shows something else.
+              _statusMessage = null;
+            }),
             keyboardType: TextInputType.url,
             autocorrect: false,
             decoration: InputDecoration(
@@ -199,7 +302,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 label: const Text('Test Connection'),
               ),
               FilledButton.icon(
-                onPressed: errorText == null ? _save : null,
+                onPressed: (errorText == null && !_pinned) ? _save : null,
                 icon: const Icon(Icons.save),
                 label: const Text('Save'),
               ),
@@ -248,6 +351,42 @@ class _StatusBanner extends StatelessWidget {
           Expanded(
             child: Text(
               message!,
+              style: theme.textTheme.bodyMedium?.copyWith(color: color),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PinnedBanner extends StatelessWidget {
+  const _PinnedBanner({required this.compileTimeOverride});
+
+  final String compileTimeOverride;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.colorScheme.primary;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        border: Border.all(color: color.withValues(alpha: 0.40)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.lock_outline, color: color, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Pinned by --dart-define=API_BASE_URL='
+              '${_displayUrl(compileTimeOverride)}. '
+              'This build always uses that URL; the field below is for Test '
+              'Connection only and Save is disabled.',
               style: theme.textTheme.bodyMedium?.copyWith(color: color),
             ),
           ),
