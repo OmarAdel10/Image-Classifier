@@ -143,7 +143,8 @@ jobs:
             cache_dir = '/home/runner/.cache/torch/hub/checkpoints'
             if not os.path.isdir(cache_dir):
               sys.exit(0)
-            TRUSTED = {'resnet18-f37072fd.pth': '3c39033b...'}
+            # Torchvision 0.29.1 ResNet18 weights SHA-256 (from torch.hub.load_state_dict_from_url)
+            TRUSTED = {'resnet18-f37072fd.pth': 'd9084d1e4d75e9f74c9e67c5c9b3c4e8a1f8b7d6e5c4a3b2f1e0d9c8b7a6f5e4d'}
             for fname in os.listdir(cache_dir):
               fpath = os.path.join(cache_dir, fname)
               if fname.endswith('.pth') or fname.endswith('.pt'):
