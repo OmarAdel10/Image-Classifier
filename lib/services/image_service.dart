@@ -135,11 +135,23 @@ class ImageService {
       );
     }
 
-    // Write to temp file - use a unique name in the system temp directory.
-    // The OS will clean up files in the temp directory automatically.
-    final tempFile = File(
-      '${Directory.systemTemp.path}/image_classifier_${DateTime.now().microsecondsSinceEpoch}.jpg',
-    );
+    // Write to temp file - use exclusive creation with collision retries.
+    // A timestamp does not provide exclusive file creation; use createTemp
+    // to reserve a unique path atomically.
+    late final File tempFile;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      final candidate = File(
+        '${Directory.systemTemp.path}/image_classifier_${DateTime.now().microsecondsSinceEpoch}_$attempt.jpg',
+      );
+      try {
+        // create(exclusive: true) fails if the file already exists.
+        await candidate.create(exclusive: true);
+        tempFile = candidate;
+        break;
+      } on FileSystemException {
+        if (attempt == 4) rethrow;
+      }
+    }
     await tempFile.writeAsBytes(jpegBytes);
 
     return tempFile;
@@ -165,7 +177,12 @@ class ImageService {
       if (info.width * info.height > defaultMaxDecodedPixels) {
         throw ImageValidationException('the image is too large to decode');
       }
-      return decoder.decode(bytes);
+      // Decode only frame 0 to bound cumulative pixels for APNG.
+      // The service uploads a static JPEG, so subsequent frames are not needed.
+      // Configuring the decoder with the service's cumulative pixel budget
+      // is not exposed by the image package API; single-frame decode is the
+      // practical mitigation.
+      return decoder.decode(bytes, frame: 0);
     } on img.ImageException {
       throw const ImageValidationException(
         'the file is not a valid PNG or JPEG image',
