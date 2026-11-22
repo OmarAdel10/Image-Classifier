@@ -135,13 +135,15 @@ class ImageService {
       );
     }
 
-    // Write to temp file - use exclusive creation with collision retries.
-    // A timestamp does not provide exclusive file creation; use createTemp
-    // to reserve a unique path atomically.
+    // Write to temp file inside a private temp directory (mode 0700) to
+    // prevent other local users from reading the JPEG on shared systems.
+    // Use exclusive creation with collision retries for the file name.
+    // The directory is not deleted here; the OS temp cleaner will reap it.
+    final tempDir = Directory.systemTemp.createTempSync('image_classifier_');
     late final File tempFile;
     for (var attempt = 0; attempt < 5; attempt++) {
       final candidate = File(
-        '${Directory.systemTemp.path}/image_classifier_${DateTime.now().microsecondsSinceEpoch}_$attempt.jpg',
+        '${tempDir.path}/compressed_${DateTime.now().microsecondsSinceEpoch}_$attempt.jpg',
       );
       try {
         // create(exclusive: true) fails if the file already exists.
@@ -153,7 +155,6 @@ class ImageService {
       }
     }
     await tempFile.writeAsBytes(jpegBytes);
-
     return tempFile;
   }
 

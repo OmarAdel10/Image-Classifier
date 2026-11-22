@@ -100,18 +100,20 @@ jobs:
 
       - name: Verify torch cache integrity
         run: |
-          # Verify the cached torch weights match expected hashes
-          # This prevents supply-chain attacks on cached model weights (CWE-494/502)
           python3 -c "
             import hashlib, os, sys
             cache_dir = '/home/runner/.cache/torch/hub/checkpoints'
             if not os.path.isdir(cache_dir):
               sys.exit(0)
+            TRUSTED = {'resnet18-f37072fd.pth': '3c39033b...'}
             for fname in os.listdir(cache_dir):
               fpath = os.path.join(cache_dir, fname)
               if fname.endswith('.pth') or fname.endswith('.pt'):
                 with open(fpath, 'rb') as f:
                   digest = hashlib.sha256(f.read()).hexdigest()
+                if fname in TRUSTED and digest != TRUSTED[fname]:
+                  print(f'ERROR: {fname} digest mismatch')
+                  sys.exit(1)
                 print(f'{fname}: sha256={digest})
           "
 
