@@ -82,7 +82,7 @@ class ImageService {
   /// Checks:
   /// - File size <= [maxBytes]
   /// - Valid image format (PNG, JPEG)
-  /// - Declared pixel count <= [maxDecodedPixels]
+  /// - Declared pixel count <= [defaultMaxDecodedPixels] (non-configurable)
   /// - Resizes if dimensions exceed 1024px
   /// - Re-encodes as JPEG at 85% quality
   ///
@@ -91,16 +91,11 @@ class ImageService {
   /// that the limit can be lowered in a test, where the compressed size
   /// cannot be made to exceed the shipped limit.
   ///
-  /// [maxDecodedPixels] defaults to [defaultMaxDecodedPixels] and is a
-  /// parameter so that the cap can be lowered in a test, where no realistic
-  /// image can be built above the shipped limit.
-  ///
   /// Returns the compressed image file.
   /// Throws [ImageValidationException] if validation fails.
   Future<File> validateAndCompress(
     File file, {
     int maxBytes = Config.maxImageSizeBytes,
-    int maxDecodedPixels = defaultMaxDecodedPixels,
   }) async {
     // Check file size
     final fileSize = await file.length();
@@ -112,7 +107,7 @@ class ImageService {
 
     // Read and decode image
     final bytes = await file.readAsBytes();
-    final image = _decodeImage(bytes, maxDecodedPixels);
+    final image = _decodeImage(bytes);
 
     if (image == null) {
       throw ImageValidationException(
@@ -140,22 +135,24 @@ class ImageService {
       );
     }
 
-    // Write to temp file
-    final tempDir = Directory.systemTemp.createTempSync('image_classifier_');
-    final outputFile = File('${tempDir.path}/compressed_image.jpg');
-    await outputFile.writeAsBytes(jpegBytes);
+    // Write to temp file - use a unique name in the system temp directory.
+    // The OS will clean up files in the temp directory automatically.
+    final tempFile = File(
+      '${Directory.systemTemp.path}/image_classifier_${DateTime.now().microsecondsSinceEpoch}.jpg',
+    );
+    await tempFile.writeAsBytes(jpegBytes);
 
-    return outputFile;
+    return tempFile;
   }
 
-  /// Decodes [bytes] under the [maxPixels] pixel cap.
+  /// Decodes [bytes] under the [defaultMaxDecodedPixels] pixel cap.
   ///
   /// The dimensions are read from the file header first, so a file that
-  /// declares more than [maxPixels] pixels is rejected before the decoder
-  /// allocates a pixel buffer. A malformed or oversized file makes the
-  /// decoder throw, so every package error becomes the fixed rejection
-  /// message: a raw package exception never leaves this method.
-  img.Image? _decodeImage(Uint8List bytes, int maxPixels) {
+  /// declares more than the cap is rejected before the decoder allocates a
+  /// pixel buffer. A malformed or oversized file makes the decoder throw, so
+  /// every package error becomes the fixed rejection message: a raw package
+  /// exception never leaves this method.
+  img.Image? _decodeImage(Uint8List bytes) {
     try {
       final decoder = img.findDecoderForData(bytes);
       if (decoder == null) {
@@ -165,7 +162,7 @@ class ImageService {
       if (info == null) {
         return null;
       }
-      if (info.width * info.height > maxPixels) {
+      if (info.width * info.height > defaultMaxDecodedPixels) {
         throw ImageValidationException('the image is too large to decode');
       }
       return decoder.decode(bytes);

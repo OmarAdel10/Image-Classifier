@@ -14,22 +14,30 @@ import 'package:image_classifier/services/api_client.dart';
 ///
 /// A credential is removed from the address: the banner is shown on screen
 /// and written to logs, so a password must not be part of it. The removal
-/// works on the authority (the part between the scheme and the path), and the
-/// last at sign wins, so a password that carries an at sign cannot hide the
-/// host or leave the tail of the password behind.
+/// uses [Uri.parse] which correctly handles passwords containing `@` by
+/// placing them in the [Uri.userInfo] field.
 String _displayUrl(String url) {
   final cleaned = url.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
-  // The pattern matches every string: the scheme is optional and the
-  // authority may be empty.
-  final match = RegExp(r'^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)')
-      .firstMatch(cleaned)!;
-  final scheme = match.group(1) ?? '';
-  final authority = match.group(2) ?? '';
-  final at = authority.lastIndexOf('@');
-  final sanitized = at < 0
-      ? cleaned
-      : '$scheme${authority.substring(at + 1)}'
-            '${cleaned.substring(match.end)}';
+  Uri parsed;
+  try {
+    parsed = Uri.parse(cleaned);
+  } catch (_) {
+    // If parsing fails, fall back to the old behaviour but still strip
+    // control characters.
+    final match = RegExp(r'^([A-Za-z][A-Za-z0-9+.-]*://)?([^/?#]*)')
+        .firstMatch(cleaned)!;
+    final scheme = match.group(1) ?? '';
+    final authority = match.group(2) ?? '';
+    final at = authority.lastIndexOf('@');
+    final sanitized = at < 0
+        ? cleaned
+        : '$scheme${authority.substring(at + 1)}'
+              '${cleaned.substring(match.end)}';
+    if (sanitized.length <= 120) return sanitized;
+    return '${sanitized.substring(0, 119)}…';
+  }
+  // Reconstruct without userInfo (credentials)
+  final sanitized = parsed.replace(userInfo: '').toString();
   if (sanitized.length <= 120) return sanitized;
   return '${sanitized.substring(0, 119)}…';
 }

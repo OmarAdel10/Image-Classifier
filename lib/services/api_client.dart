@@ -330,9 +330,9 @@ class ApiClient {
     } on IOException {
       throw _transportFailure(url);
     } on FormatException {
-      // The address could not be turned into a request, so nothing was sent
-      // and no response arrived. The wording of a response that cannot be
-      // parsed would name the wrong cause here.
+      // The request construction failed (e.g., invalid URL), so nothing was
+      // sent and no response arrived. Response parsing happens outside this
+      // method and its FormatExceptions are handled separately.
       throw _transportFailure(url);
     } on TypeError {
       // The client failed before a response arrived, so no status line was
@@ -344,13 +344,13 @@ class ApiClient {
       // exception text is dropped: a custom client can carry any text in it.
       throw ApiException(message: 'Invalid request to $url.', statusCode: 502);
     } on Exception {
-      // The client failed while the request was sent or the body was read,
-      // in a way this list does not name. The request never reached a
-      // complete answer, so it is a transport failure. The raw error text is
-      // dropped: a custom client can carry any text in it.
+      // An unexpected exception occurred during the request. This catches
+      // exceptions not listed above (e.g., from a custom http.Client).
       throw _transportFailure(url);
     } on Error {
-      // The same holds for an error that is not an exception.
+      // Programming errors (StateError, etc.) from a custom client or the
+      // request closure itself. These are not caught above and would crash the
+      // app if unhandled. Map to transport failure with generic message.
       throw _transportFailure(url);
     }
   }
@@ -608,14 +608,22 @@ class ApiClient {
   }
 
   /// Sanitizes error messages to prevent leaking sensitive data.
-  /// Limits length and strips control characters.
+  /// Limits length and strips control characters and Unicode format
+  /// characters (bidi overrides, zero-width joiners, etc.) that could be
+  /// used for visual spoofing in a WebView or text renderer (CWE-451).
   String _sanitizeErrorMessage(String message) {
     const maxLength = 500;
-    // Strip control characters except newlines/tabs
-    final sanitized = message.replaceAll(
-      RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'),
-      '',
-    );
+    // Strip C0/C1 control characters (except newline/tab) and Cf format
+    // characters (U+0600–U+0605, U+200B–U+200F, U+202A–U+202E,
+    // U+2060–U+206F, U+FEFF).
+    final sanitized = message
+        .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '')
+        .replaceAll(
+          RegExp(
+            r'[\u0600-\u0605\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]',
+          ),
+          '',
+        );
     if (sanitized.length > maxLength) {
       return '${sanitized.substring(0, maxLength)}... [truncated]';
     }

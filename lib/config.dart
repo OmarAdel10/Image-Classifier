@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A configuration failure whose message is safe to show to the user.
@@ -139,7 +140,10 @@ class Config {
     final SharedPreferences prefs;
     try {
       prefs = await SharedPreferences.getInstance();
-    } catch (_) {
+    } on Exception catch (_) {
+      throw ApiConfigError('Could not store the API base URL.');
+    } on Error catch (_) {
+      // Programming errors from a misbehaving store implementation.
       throw ApiConfigError('Could not store the API base URL.');
     }
     // The value that is in use before the write, so the rollback can put it
@@ -149,13 +153,18 @@ class Config {
     String? previous;
     try {
       previous = prefs.getString(apiBaseUrlPrefsKey);
-    } catch (_) {
+    } on TypeError {
+      // The platform returned a non-string value; treat as no previous value.
       previous = null;
     }
     final bool stored;
     try {
       stored = await prefs.setString(apiBaseUrlPrefsKey, normalized);
-    } catch (_) {
+    } on Exception catch (_) {
+      await _rollbackStoredUrl(prefs, previous);
+      throw ApiConfigError('Could not store the API base URL.');
+    } on Error catch (_) {
+      // Programming errors from a misbehaving store implementation.
       await _rollbackStoredUrl(prefs, previous);
       throw ApiConfigError('Could not store the API base URL.');
     }
@@ -182,16 +191,23 @@ class Config {
   /// back, which restores the cache even when the platform refuses that
   /// write as well, because `shared_preferences` updates the cache before it
   /// calls the store.
-  static Future<void> _rollbackStoredUrl(
+  ///
+  /// Returns true if the rollback succeeded, false if it failed. The caller
+  /// is responsible for reporting the original storage failure; a failed
+  /// rollback is logged in debug mode but does not mask the primary error.
+  static Future<bool> _rollbackStoredUrl(
     SharedPreferences prefs,
     String? previous,
   ) async {
     try {
       await prefs.reload();
-      return;
-    } catch (_) {
+      return true;
+    } on Exception {
       // The platform is unreadable as well: fall through and put the
       // previous value back into the cache.
+    } on Error {
+      // Programming errors from a misbehaving store implementation.
+      // Fall through to write-back.
     }
     try {
       if (previous == null) {
@@ -199,11 +215,24 @@ class Config {
       } else {
         await prefs.setString(apiBaseUrlPrefsKey, previous);
       }
-    } catch (_) {
+      return true;
+    } on Exception catch (e) {
       // The write-back failed as well. `shared_preferences` updates its
       // cache before it calls the store, so the cache already holds the
       // restored address (or no address at all); the caller reports the
-      // storage failure.
+      // storage failure. Log in debug for visibility.
+      assert(() {
+        debugPrint('_rollbackStoredUrl write-back failed: $e');
+        return true;
+      }());
+      return false;
+    } on Error catch (e) {
+      // Programming errors from a misbehaving store implementation.
+      assert(() {
+        debugPrint('_rollbackStoredUrl write-back failed: $e');
+        return true;
+      }());
+      return false;
     }
   }
 
