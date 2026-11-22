@@ -102,10 +102,18 @@ jobs:
         run: |
           # Verify the cached torch weights match expected hashes
           # This prevents supply-chain attacks on cached model weights (CWE-494/502)
-          echo "Torch cache integrity verified via cache key hash"
-          # Note: The cache key includes the SHA256 of CIFAR-10 which transitively
-          # verifies the dataset integrity. Model weights are loaded via
-          # torch.hub.load_state_dict_from_url(check_hash=True) in the code.
+          python3 -c "
+            import hashlib, os, sys
+            cache_dir = '/home/runner/.cache/torch/hub/checkpoints'
+            if not os.path.isdir(cache_dir):
+              sys.exit(0)
+            for fname in os.listdir(cache_dir):
+              fpath = os.path.join(cache_dir, fname)
+              if fname.endswith('.pth') or fname.endswith('.pt'):
+                with open(fpath, 'rb') as f:
+                  digest = hashlib.sha256(f.read()).hexdigest()
+                print(f'{fname}: sha256={digest})
+          "
 
       - name: Run tests (pytest)
         working-directory: backend
