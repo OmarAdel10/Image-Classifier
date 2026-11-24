@@ -48,17 +48,22 @@ Widget _buildHomeScreen({
   required http.Client httpClient,
   required ImageService imageService,
   ThemeData? theme,
+  ApiClient? apiClient,
 }) {
-  final apiClient = ApiClient(
-    client: httpClient,
-    timeout: const Duration(milliseconds: 100),
-  );
+  final client =
+      apiClient ??
+      ApiClient(
+        client: httpClient,
+        // A generous budget: a short timeout races the mocked failures under
+        // load, which made the error-path tests flaky.
+        timeout: const Duration(seconds: 5),
+      );
   return MultiProvider(
     providers: [
       Provider<ImageService>.value(value: imageService),
-      Provider<ApiClient>.value(value: apiClient),
+      Provider<ApiClient>.value(value: client),
       ChangeNotifierProvider<PredictionProvider>(
-        create: (_) => PredictionProvider(apiClient: apiClient),
+        create: (_) => PredictionProvider(apiClient: client),
       ),
     ],
     child: MaterialApp(theme: theme, home: const HomeScreen()),
@@ -226,6 +231,226 @@ void main() {
       expect(snackBar.action, isNull);
     });
 
+    testWidgets('does not leak the raw text of an image failure', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any))
+          .thenThrow(StateError('bad image'));
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: MockClient((request) async => http.Response('{}', 200)),
+          imageService: imageService,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      // The fallback text is pinned exactly: a wrong sentence would still
+      // satisfy the negative assertions below.
+      expect(
+        find.text('Invalid image: the selected file could not be read.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Bad state:'), findsNothing);
+      expect(find.textContaining('bad image'), findsNothing);
+      expect(find.textContaining('StateError'), findsNothing);
+    });
+
+    testWidgets('names the same reason for any other image failure', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any)).thenThrow(Exception('boom'));
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: MockClient((request) async => http.Response('{}', 200)),
+          imageService: imageService,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      expect(
+        find.text('Invalid image: the selected file could not be read.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('boom'), findsNothing);
+      expect(find.textContaining('Exception'), findsNothing);
+    });
+
+    testWidgets('shows the reason why an image was rejected', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any)).thenThrow(
+        const ImageValidationException(
+          'only PNG and JPEG images are supported',
+        ),
+      );
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: MockClient((request) async => http.Response('{}', 200)),
+          imageService: imageService,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      expect(
+        find.textContaining('only PNG and JPEG images are supported'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('ImageValidationException'), findsNothing);
+    });
+
+    testWidgets('does not leak the raw text of a model info failure', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      final pickedFile = _InMemoryXFile(
+        imageFile.path,
+        imageFile.readAsBytesSync(),
+      );
+      final imageService = MockImageService();
+      when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+      when(imageService.validateAndCompress(any))
+          .thenAnswer((_) async => imageFile);
+
+      final mockClient = MockClient((request) async {
+        if (request.url.path == '/model-info') {
+          throw StateError('backend exploded');
+        }
+        return http.Response('{}', 200);
+      });
+
+      await tester.pumpWidget(
+        _buildHomeScreen(httpClient: mockClient, imageService: imageService),
+      );
+      await tester.pumpAndSettle();
+
+      await _tapDropZoneAndSettle(tester);
+
+      expect(find.textContaining('Could not load model info'), findsOneWidget);
+      // The client names the failure class with a fixed message, so the raw
+      // text of the failure never reaches the screen.
+      expect(find.textContaining('Cannot reach'), findsOneWidget);
+      expect(find.textContaining('Bad state:'), findsNothing);
+      expect(find.textContaining('backend exploded'), findsNothing);
+      expect(find.textContaining('StateError'), findsNothing);
+    });
+
+    testWidgets(
+      'reports an unexpected model info failure without its raw text',
+      (WidgetTester tester) async {
+        final imageFile = _createTempImageFile();
+        final pickedFile = _InMemoryXFile(
+          imageFile.path,
+          imageFile.readAsBytesSync(),
+        );
+        final imageService = MockImageService();
+        when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+        when(imageService.validateAndCompress(any))
+            .thenAnswer((_) async => imageFile);
+
+        // The client is replaced by one that fails in a way the client itself
+        // does not name, so the screen has to report the failure with its own
+        // fixed message.
+        final mockApiClient = MockApiClient();
+        when(mockApiClient.getModelInfo())
+            .thenThrow(StateError('backend exploded'));
+
+        await tester.pumpWidget(
+          _buildHomeScreen(
+            httpClient: MockClient((request) async => http.Response('{}', 200)),
+            imageService: imageService,
+            apiClient: mockApiClient,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await _tapDropZoneAndSettle(tester);
+
+        expect(
+          find.textContaining('Could not load model info'),
+          findsOneWidget,
+        );
+        // The failure is not an ApiException, so the screen names it with its
+        // own message instead of repeating the raw error text.
+        expect(
+          find.textContaining('An unexpected error occurred.'),
+          findsOneWidget,
+        );
+        expect(find.textContaining('Bad state:'), findsNothing);
+        expect(find.textContaining('backend exploded'), findsNothing);
+        expect(find.textContaining('StateError'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'replaces a previous image error snackbar instead of queueing',
+      (WidgetTester tester) async {
+        final imageFile = _createTempImageFile();
+        final pickedFile = _InMemoryXFile(
+          imageFile.path,
+          imageFile.readAsBytesSync(),
+        );
+        var validations = 0;
+        final imageService = MockImageService();
+        when(imageService.pickImage()).thenAnswer((_) async => pickedFile);
+        when(imageService.validateAndCompress(any)).thenAnswer((_) async {
+          validations++;
+          // A rejection with a reason the user may read: the two messages
+          // have to differ, so the second snackbar can be told apart from the
+          // first one.
+          throw ImageValidationException(
+            validations == 1 ? 'first image failure' : 'second image failure',
+          );
+        });
+
+        await tester.pumpWidget(
+          _buildHomeScreen(
+            httpClient: MockClient((request) async => http.Response('{}', 200)),
+            imageService: imageService,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await _tapDropZoneAndSettle(tester);
+        await _tapDropZoneAndSettle(tester);
+
+        // The second image error must REPLACE the first snackbar
+        // (hideCurrentSnackBar), not queue behind it.
+        expect(find.textContaining('second image failure'), findsOneWidget);
+        expect(find.textContaining('first image failure'), findsNothing);
+        expect(find.byType(SnackBar), findsOneWidget);
+      },
+    );
+
     testWidgets('prediction errors offer a Settings action that navigates', (
       WidgetTester tester,
     ) async {
@@ -298,6 +523,63 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(SnackBar), findsNothing);
+    });
+
+    testWidgets('replaces a different prediction error instead of queueing', (
+      WidgetTester tester,
+    ) async {
+      final imageFile = _createTempImageFile();
+      var predictCalls = 0;
+      final mockClient = MockClient((request) async {
+        if (request.url.path == '/model-info') {
+          return http.Response(
+            '{"model": "cnn_scratch", "classes": ["cat", "dog"]}',
+            200,
+          );
+        }
+        if (predictCalls == 0) {
+          predictCalls++;
+          throw const SocketException('first failure');
+        }
+        // The backend answered with an error status, so the banner reports
+        // that status instead of blaming the connection.
+        return http.Response('internal failure', 500);
+      });
+
+      await tester.pumpWidget(
+        _buildHomeScreen(
+          httpClient: mockClient,
+          imageService: MockImageService(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final provider = tester
+          .element(find.byType(HomeScreen))
+          .read<PredictionProvider>();
+      final image = XFile(imageFile.path);
+
+      await tester.runAsync(() async {
+        await provider.predict(image);
+      });
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Cannot reach'), findsOneWidget);
+      expect(find.byType(SnackBar), findsOneWidget);
+
+      // A second, different error must REPLACE the first snackbar
+      // (hideCurrentSnackBar), not queue behind it.
+      await tester.runAsync(() async {
+        await provider.predict(image);
+      });
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Request failed with status 500'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Cannot reach'), findsNothing);
+      expect(find.byType(SnackBar), findsOneWidget);
     });
   });
 }

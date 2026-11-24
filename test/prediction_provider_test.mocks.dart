@@ -5,14 +5,16 @@
 // ignore_for_file: no_leading_underscores_for_library_prefixes
 
 import 'dart:async' as _i6;
-import 'dart:io' as _i7;
+import 'dart:io' as _i8;
+import 'dart:typed_data' as _i10;
 
-import 'package:cross_file/cross_file.dart' as _i8;
+import 'package:cross_file/cross_file.dart' as _i9;
 import 'package:http/http.dart' as _i2;
 import 'package:image_classifier/models/model_info.dart' as _i3;
 import 'package:image_classifier/models/prediction.dart' as _i4;
 import 'package:image_classifier/services/api_client.dart' as _i5;
 import 'package:mockito/mockito.dart' as _i1;
+import 'package:mockito/src/dummies.dart' as _i7;
 
 // ignore_for_file: type=lint
 // ignore_for_file: avoid_redundant_argument_values
@@ -61,10 +63,30 @@ class MockApiClient extends _i1.Mock implements _i5.ApiClient {
   ) as _i2.Client);
 
   @override
+  _i6.Future<String> get baseUrl => (super.noSuchMethod(
+    Invocation.getter(#baseUrl),
+    returnValue: _i6.Future<String>.value(
+      _i7.dummyValue<String>(this, Invocation.getter(#baseUrl)),
+    ),
+  ) as _i6.Future<String>);
+
+  @override
+  void invalidateBaseUrlCache() => super.noSuchMethod(
+    Invocation.method(#invalidateBaseUrlCache, []),
+    returnValueForMissingStub: null,
+  );
+
+  @override
   _i6.Future<bool> healthCheck() => (super.noSuchMethod(
     Invocation.method(#healthCheck, []),
     returnValue: _i6.Future<bool>.value(false),
   ) as _i6.Future<bool>);
+
+  @override
+  _i6.Future<int?> healthStatusCode() => (super.noSuchMethod(
+    Invocation.method(#healthStatusCode, []),
+    returnValue: _i6.Future<int?>.value(),
+  ) as _i6.Future<int?>);
 
   @override
   _i6.Future<_i3.ModelInfo> getModelInfo() => (super.noSuchMethod(
@@ -75,7 +97,7 @@ class MockApiClient extends _i1.Mock implements _i5.ApiClient {
   ) as _i6.Future<_i3.ModelInfo>);
 
   @override
-  _i6.Future<_i4.PredictionResponse> predict(_i7.File? imageFile) =>
+  _i6.Future<_i4.PredictionResponse> predict(_i8.File? imageFile) =>
       (super.noSuchMethod(
         Invocation.method(#predict, [imageFile]),
         returnValue: _i6.Future<_i4.PredictionResponse>.value(
@@ -87,7 +109,7 @@ class MockApiClient extends _i1.Mock implements _i5.ApiClient {
       ) as _i6.Future<_i4.PredictionResponse>);
 
   @override
-  _i6.Future<_i4.PredictionResponse> predictXFile(_i8.XFile? xFile) =>
+  _i6.Future<_i4.PredictionResponse> predictXFile(_i9.XFile? xFile) =>
       (super.noSuchMethod(
         Invocation.method(#predictXFile, [xFile]),
         returnValue: _i6.Future<_i4.PredictionResponse>.value(
@@ -97,6 +119,20 @@ class MockApiClient extends _i1.Mock implements _i5.ApiClient {
           ),
         ),
       ) as _i6.Future<_i4.PredictionResponse>);
+
+  @override
+  _i6.Future<_i4.PredictionResponse> predictBytes(
+    _i10.Uint8List? bytes,
+    String? fileName,
+  ) => (super.noSuchMethod(
+    Invocation.method(#predictBytes, [bytes, fileName]),
+    returnValue: _i6.Future<_i4.PredictionResponse>.value(
+      _FakePredictionResponse_2(
+        this,
+        Invocation.method(#predictBytes, [bytes, fileName]),
+      ),
+    ),
+  ) as _i6.Future<_i4.PredictionResponse>);
 
   @override
   _i6.Future<void> dispose() => (super.noSuchMethod(

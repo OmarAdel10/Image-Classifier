@@ -143,7 +143,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } catch (e) {
       if (!mounted) return;
-      _showImageErrorSnackBar('Invalid image: $e');
+      _showImageErrorSnackBar('Invalid image: ${_imageErrorMessage(e)}');
       setState(() {
         _selectedImage = null;
         _isFetchingModelInfo = false;
@@ -230,33 +230,50 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   /// Extracts a human-readable message from an API or generic exception.
+  ///
+  /// Only an [ApiException] carries a message that was written for the user.
+  /// Every other failure gets a fixed message, so no raw Dart error text
+  /// reaches the screen.
   String _errorMessage(Object error) {
     if (error is ApiException) return error.message;
-    return error.toString();
+    return 'An unexpected error occurred.';
+  }
+
+  /// Renders an image failure without leaking the raw exception text.
+  ///
+  /// Only an [ImageValidationException] carries a message that was written
+  /// for the user; every other failure gets a fixed message.
+  String _imageErrorMessage(Object error) {
+    if (error is ImageValidationException) return error.message;
+    return 'the selected file could not be read.';
   }
 
   void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Theme.of(context).colorScheme.error,
-        action: SnackBarAction(
-          label: 'Settings',
-          textColor: Theme.of(context).colorScheme.onError,
-          onPressed: _openSettings,
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Theme.of(context).colorScheme.error,
+          action: SnackBarAction(
+            label: 'Settings',
+            textColor: Theme.of(context).colorScheme.onError,
+            onPressed: _openSettings,
+          ),
+          duration: const Duration(seconds: 8),
         ),
-        duration: const Duration(seconds: 8),
-      ),
-    );
+      );
   }
 
   void _showImageErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Theme.of(context).colorScheme.error,
-      ),
-    );
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Theme.of(context).colorScheme.error,
+        ),
+      );
   }
 }
 
