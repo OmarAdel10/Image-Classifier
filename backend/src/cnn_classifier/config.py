@@ -112,12 +112,12 @@ class Config(BaseSettings):
 
     # Model paths
     model_path: str = Field(
-        default="checkpoints/best_model.pt",
+        default="checkpoints/imagenet_resnet18.pt",
         validation_alias="CNN_MODEL_PATH",
         description="Path to trained model weights",
     )
     labels_path: str = Field(
-        default="checkpoints/labels.json",
+        default="checkpoints/imagenet_labels.json",
         validation_alias="CNN_LABELS_PATH",
         description="Path to class labels JSON",
     )
@@ -133,7 +133,7 @@ class Config(BaseSettings):
     # pydantic-settings from JSON-decoding the env string; the before-validator
     # below parses formats like "32,32" (env) and tuple/list kwargs instead.
     input_size: Annotated[tuple[int, int], NoDecode] = Field(
-        default=(32, 32),
+        default=(224, 224),
         validation_alias="CNN_INPUT_SIZE",
         description="Model input size (H, W)",
     )
@@ -184,6 +184,18 @@ class Config(BaseSettings):
 
     # Reproducibility
     seed: int = Field(default=42, ge=0, validation_alias="CNN_SEED", description="Random seed")
+
+    # Logging
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(
+        default="INFO",
+        validation_alias="CNN_LOG_LEVEL",
+        description="Log level",
+    )
+    log_json: bool = Field(
+        default=False,
+        validation_alias="CNN_LOG_JSON",
+        description="Use JSON log format (for CI/parsers)",
+    )
 
     @field_validator("device", mode="before")
     @classmethod
@@ -273,6 +285,8 @@ class Config(BaseSettings):
             "batch_size": self.batch_size,
             "num_workers": self.num_workers,
             "seed": self.seed,
+            "log_level": self.log_level,
+            "log_json": self.log_json,
         }
         fingerprint = hashlib.sha256(json_lib.dumps(fields, sort_keys=True).encode()).hexdigest()[
             :16

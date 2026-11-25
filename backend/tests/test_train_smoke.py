@@ -42,7 +42,7 @@ class TestTrainOneEpoch:
         """Spec test: one epoch runs and returns loss/acc metrics."""
         from cnn_classifier.training.train import train_one_epoch
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         loader = [(torch.randn(2, 3, 32, 32), torch.randint(0, 10, (2,)))]
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -55,7 +55,7 @@ class TestTrainOneEpoch:
         """Loss is non-negative finite; accuracy is a fraction in [0, 1]."""
         from cnn_classifier.training.train import train_one_epoch
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         loader = _fake_loader(batches=2)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -68,7 +68,7 @@ class TestTrainOneEpoch:
         """Parameters actually change after one optimizer step."""
         from cnn_classifier.training.train import train_one_epoch
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         before = model.head[-1].weight.detach().clone()
         opt = torch.optim.AdamW(model.parameters(), lr=1e-1)
@@ -110,7 +110,7 @@ class TestValidate:
         """validate runs under no_grad and returns loss/acc."""
         from cnn_classifier.training.train import validate
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         crit = torch.nn.CrossEntropyLoss()
         metrics = validate(model, _fake_loader(batches=2), crit, "cpu")
@@ -122,7 +122,7 @@ class TestValidate:
         """validate puts the model in eval mode (no dropout noise)."""
         from cnn_classifier.training.train import validate
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         crit = torch.nn.CrossEntropyLoss()
         validate(model, _fake_loader(), crit, "cpu")
@@ -136,7 +136,7 @@ class TestEvaluate:
         """evaluate returns acc, per-class metrics, and a confusion matrix."""
         from cnn_classifier.training.evaluate import evaluate
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         metrics = evaluate(model, _fake_loader(batches=2), "cpu", CLASS_NAMES)
         assert 0.0 <= metrics["acc"] <= 1.0
@@ -171,7 +171,7 @@ class TestEvaluate:
         """classification report saves a parseable JSON file."""
         from cnn_classifier.training.evaluate import evaluate, save_classification_report
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         metrics = evaluate(model, _fake_loader(), "cpu", CLASS_NAMES)
         report_path = tmp_path / "classification_report.json"
@@ -190,7 +190,7 @@ class TestCheckpoint:
         """Checkpoint dict roundtrips with all spec'd keys."""
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -236,7 +236,7 @@ class TestCheckpoint:
         """A failed save leaves the previous checkpoint intact with no .tmp residue."""
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         path = tmp_path / "best_model.pt"
@@ -262,7 +262,7 @@ class TestCheckpointSHA256:
         """save_checkpoint writes a .sha256 sidecar next to the checkpoint."""
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -295,7 +295,7 @@ class TestCheckpointSHA256:
         from cnn_classifier.inference.checkpoints import load_checkpoint
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -318,7 +318,7 @@ class TestCheckpointSHA256:
         from cnn_classifier.inference.checkpoints import load_checkpoint
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -342,7 +342,7 @@ class TestCheckpointSHA256:
         from cnn_classifier.inference.checkpoints import load_checkpoint
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -369,7 +369,7 @@ class TestCheckpointSHA256:
         from cnn_classifier.inference.checkpoints import load_checkpoint
 
         # Create a checkpoint without a SHA256 sidecar (simulate pre-IC-32)
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -401,7 +401,7 @@ class TestCheckpointSHA256:
         from cnn_classifier.inference.checkpoints import load_checkpoint
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -472,7 +472,7 @@ class TestRunTraining:
         from cnn_classifier.training import cli as cli_module
 
         monkeypatch.setenv("CNN_PROJECT_ROOT", str(tmp_path))
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         stub = _AlwaysZero()
         monkeypatch.setattr(cli_module, "get_model", lambda name, config: stub)
         val_loader = [(torch.randn(2, 3, 32, 32), torch.zeros(2, dtype=torch.long))]
@@ -585,7 +585,7 @@ class TestEmptyLoaderGuards:
     def test_train_one_epoch_empty_loader(self):
         from cnn_classifier.training.train import train_one_epoch
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         crit = nn.CrossEntropyLoss()
@@ -594,7 +594,7 @@ class TestEmptyLoaderGuards:
     def test_validate_empty_loader(self):
         from cnn_classifier.training.train import validate
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         crit = nn.CrossEntropyLoss()
         assert validate(model, [], crit, "cpu") == {"loss": 0.0, "acc": 0.0}
@@ -602,7 +602,7 @@ class TestEmptyLoaderGuards:
     def test_evaluate_empty_loader(self):
         from cnn_classifier.training.evaluate import evaluate
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         metrics = evaluate(model, [], "cpu", CLASS_NAMES)
         assert metrics["acc"] == 0.0
@@ -703,7 +703,7 @@ class TestValidateNoGrad:
     def test_validate_leaves_grads_none(self):
         from cnn_classifier.training.train import validate
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         crit = nn.CrossEntropyLoss()
         validate(model, _fake_loader(), crit, "cpu")
@@ -725,7 +725,7 @@ class TestReportAndCheckpointExtras:
     def test_optimizer_state_restorable(self, tmp_path):
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         path = tmp_path / "best_model.pt"
@@ -820,7 +820,7 @@ class TestFixRoundTwoSecurity:
         from cnn_classifier.config import Config
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         path = tmp_path / "ckpt.pt"
@@ -1075,7 +1075,7 @@ class TestFixRoundThreeSecurity:
 
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         path = tmp_path / "best.pt"
@@ -1131,7 +1131,7 @@ class TestFixRoundThreeBehavioral:
         from cnn_classifier.training.evaluate import evaluate
         from cnn_classifier.training.train import train_one_epoch, validate
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         crit = torch.nn.CrossEntropyLoss()
@@ -1278,8 +1278,8 @@ class TestAtomicWriteHelper:
 class TestFixRoundFiveM4Paths:
     """Per-model default checkpoint paths (user-ruled M4)."""
 
-    def test_scratch_main_sets_per_model_checkpoint_default(self, tmp_path, monkeypatch):
-        """train_scratch defaults to best_model_cnn_scratch.pt."""
+    def test_scratch_main_uses_canonical_checkpoint_default(self, tmp_path, monkeypatch):
+        """train_scratch defaults to canonical checkpoint path."""
         import scripts.train_scratch as scratch
 
         monkeypatch.delenv("CNN_MODEL_PATH", raising=False)
@@ -1293,14 +1293,14 @@ class TestFixRoundFiveM4Paths:
             scratch, "run_training", lambda config, name, epochs, lr: recorded.append(config)
         )
         scratch.main()
-        assert recorded[0].model_path == "checkpoints/best_model_cnn_scratch.pt"
+        assert recorded[0].model_path == "checkpoints/best_model.pt"
         clear_config_cache()
         import os
 
         os.environ.pop("CNN_MODEL_PATH", None)
 
-    def test_transfer_main_sets_per_model_checkpoint_default(self, tmp_path, monkeypatch):
-        """train_transfer defaults to best_model_resnet18.pt."""
+    def test_transfer_main_uses_canonical_checkpoint_default(self, tmp_path, monkeypatch):
+        """train_transfer defaults to canonical checkpoint path."""
         import scripts.train_transfer as transfer
 
         monkeypatch.delenv("CNN_MODEL_PATH", raising=False)
@@ -1311,7 +1311,7 @@ class TestFixRoundFiveM4Paths:
             transfer, "run_training", lambda config, name, epochs, lr: recorded.append(config)
         )
         transfer.main()
-        assert recorded[0].model_path == "checkpoints/best_model_resnet18.pt"
+        assert recorded[0].model_path == "checkpoints/best_model.pt"
         import os
 
         os.environ.pop("CNN_MODEL_PATH", None)
@@ -1381,7 +1381,7 @@ class TestLoadCheckpointWithSidecar:
         from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"
@@ -1409,7 +1409,7 @@ class TestLoadCheckpointWithSidecar:
         from cnn_classifier.inference.checkpoints import load_checkpoint_with_sidecar
         from cnn_classifier.training.train import save_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
         ckpt_path = tmp_path / "best_model.pt"

@@ -34,7 +34,7 @@ def cifar_data_dir(tmp_path_factory):
 @pytest.fixture(scope="session")
 def loaders(cifar_data_dir):
     """Shared train/val/test loaders built once per test session."""
-    cfg = Config(batch_size=4, num_workers=0)
+    cfg = Config(batch_size=4, num_workers=0, input_size=(32, 32))
     return get_dataloaders(cfg, data_dir=cifar_data_dir)
 
 
@@ -189,18 +189,18 @@ class TestGetDataloaders:
 
         monkeypatch.setattr(dataset_module.datasets, "CIFAR10", FakeCIFAR10)
         monkeypatch.setattr(dataset_module, "_get_project_root", lambda: tmp_path)
-        cfg = Config(batch_size=4, num_workers=0)
+        cfg = Config(batch_size=4, num_workers=0, input_size=(32, 32))
         result = get_dataloaders(cfg)
         assert len(result) == 3
         assert captured_roots == [str(tmp_path / "data")] * 3
 
     def test_val_ratio_must_be_non_negative(self, cifar_data_dir):
-        cfg = Config(batch_size=4, num_workers=0)
+        cfg = Config(batch_size=4, num_workers=0, input_size=(32, 32))
         with pytest.raises(ValueError, match="val_ratio"):
             get_dataloaders(cfg, data_dir=cifar_data_dir, val_ratio=-0.1)
 
     def test_val_ratio_must_be_below_one(self, cifar_data_dir):
-        cfg = Config(batch_size=4, num_workers=0)
+        cfg = Config(batch_size=4, num_workers=0, input_size=(32, 32))
         with pytest.raises(ValueError, match="val_ratio"):
             get_dataloaders(cfg, data_dir=cifar_data_dir, val_ratio=1.0)
 
@@ -220,7 +220,7 @@ class TestGetDataloaders:
 
         monkeypatch.setattr(dataset_module.datasets, "CIFAR10", FakeCIFAR10)
         monkeypatch.setattr(dataset_module, "_get_project_root", lambda: tmp_path)
-        cfg = Config(batch_size=4, num_workers=0)
+        cfg = Config(batch_size=4, num_workers=0, input_size=(32, 32))
         _, val_loader, _ = get_dataloaders(cfg, val_ratio=0.0)
         assert len(val_loader.dataset) == 0
 
@@ -232,7 +232,7 @@ class TestGetDataloaders:
 
     def test_train_loader_reproducible_given_seed(self, cifar_data_dir):
         """Same config + same global RNG state -> identical first train batch."""
-        cfg = Config(batch_size=4, num_workers=0, seed=123)
+        cfg = Config(batch_size=4, num_workers=0, seed=123, input_size=(32, 32))
         train_a, _, _ = get_dataloaders(cfg, data_dir=cifar_data_dir)
         torch.manual_seed(999)
         x_a, y_a = next(iter(train_a))

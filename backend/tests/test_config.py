@@ -30,10 +30,10 @@ class TestConfig:
         config = Config()
 
         assert config.port == 8000
-        assert config.model_path == "checkpoints/best_model.pt"
-        assert config.labels_path == "checkpoints/labels.json"
+        assert config.model_path == "checkpoints/imagenet_resnet18.pt"
+        assert config.labels_path == "checkpoints/imagenet_labels.json"
         assert config.device in ("cpu", "cuda", "mps")  # auto detects
-        assert config.input_size == (32, 32)
+        assert config.input_size == (224, 224)
         assert config.batch_size == 64
         assert config.num_workers == 4
         assert config.seed == 42
@@ -422,7 +422,7 @@ class TestConfigValidation:
         config = Config()
         resolved = config.labels_path_resolved
         assert resolved.is_absolute()
-        assert resolved.name == "labels.json"
+        assert resolved.name == "imagenet_labels.json"
 
     def test_relative_paths_anchored_to_project_root_not_cwd(self, tmp_path, monkeypatch):
         """Relative defaults anchor to project root regardless of process CWD."""
@@ -430,8 +430,8 @@ class TestConfigValidation:
 
         monkeypatch.chdir(tmp_path)  # unrelated CWD, no CNN_PROJECT_ROOT override
         config = Config()
-        assert config.model_path_resolved == _PROJECT_ROOT / "checkpoints" / "best_model.pt"
-        assert config.labels_path_resolved == _PROJECT_ROOT / "checkpoints" / "labels.json"
+        assert config.model_path_resolved == _PROJECT_ROOT / "checkpoints" / "imagenet_resnet18.pt"
+        assert config.labels_path_resolved == _PROJECT_ROOT / "checkpoints" / "imagenet_labels.json"
 
     def test_model_path_resolved_absolute_within_project(self, tmp_path, monkeypatch):
         """Absolute path within project root works."""

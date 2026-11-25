@@ -25,7 +25,7 @@ class PredictionBars extends StatelessWidget {
         minY: 0,
         barGroups: _buildBarGroups(sorted),
         titlesData: FlTitlesData(
-          show: true,
+          show: false,
           leftTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,

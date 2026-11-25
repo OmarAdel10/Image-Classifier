@@ -108,7 +108,7 @@ class TestHealth:
         test_client, _ = client
         response = test_client.get("/health")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.json() == {"status": "ok", "service": "cnn-classifier"}
 
     def test_health_does_not_load_the_model(self):
         """Health stays available even when no checkpoint can be loaded."""
@@ -123,6 +123,7 @@ class TestHealth:
         finally:
             app.dependency_overrides.clear()
         assert response.status_code == 200
+        assert response.json() == {"status": "ok", "service": "cnn-classifier"}
 
 
 class TestPredict:
@@ -634,4 +635,4 @@ class TestHealthResilience:
         finally:
             clear_predictor_cache()
         assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
+        assert response.json() == {"status": "ok", "service": "cnn-classifier"}

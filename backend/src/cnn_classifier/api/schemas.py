@@ -10,6 +10,19 @@ class HealthResponse(BaseModel):
     """Liveness probe response."""
 
     status: Literal["ok"] = "ok"
+    service: Literal["cnn-classifier"] = "cnn-classifier"
+
+
+class ReadyResponse(BaseModel):
+    """Readiness probe response: model loaded and ready to serve."""
+
+    status: Literal["ready", "not_ready"] = "ready"
+    service: Literal["cnn-classifier"] = "cnn-classifier"
+    model_loaded: bool
+    model_path: str | None = None
+    device: str | None = None
+    classes: int | None = None
+    error: str | None = None
 
 
 class PredictionItem(BaseModel):
