@@ -51,7 +51,10 @@ class TestReadinessEndpoint:
 
     def test_ready_when_model_not_loaded(self) -> None:
         """Test /ready returns 503 when predictor fails to load."""
-        with patch("cnn_classifier.api.main.get_predictor", side_effect=RuntimeError("Checkpoint not found")):
+        with patch(
+            "cnn_classifier.api.main.get_predictor",
+            side_effect=RuntimeError("Checkpoint not found"),
+        ):
             client = TestClient(app)
             response = client.get("/ready")
 

@@ -15,10 +15,21 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 SUPPORTED_MODELS = Literal[
-    "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
-    "mobilenet_v2", "mobilenet_v3_large", "mobilenet_v3_small",
-    "efficientnet_b0", "efficientnet_b1", "efficientnet_b2",
-    "vit_b_16", "vit_b_32", "vit_l_16", "vit_l_32",
+    "resnet18",
+    "resnet34",
+    "resnet50",
+    "resnet101",
+    "resnet152",
+    "mobilenet_v2",
+    "mobilenet_v3_large",
+    "mobilenet_v3_small",
+    "efficientnet_b0",
+    "efficientnet_b1",
+    "efficientnet_b2",
+    "vit_b_16",
+    "vit_b_32",
+    "vit_l_16",
+    "vit_l_32",
 ]
 
 
@@ -113,6 +124,7 @@ class ImageNetPredictor:
         labels_path = config.labels_path_resolved
         if labels_path.exists():
             import json
+
             with open(labels_path) as f:
                 labels = json.load(f)
             if isinstance(labels, list) and len(labels) == 1000:
@@ -157,9 +169,11 @@ class ImageNetPredictor:
 
 def get_imagenet_transform(input_size: tuple) -> transforms.Compose:
     """Get the standard ImageNet preprocessing transform."""
-    return transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(input_size[0]),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ])
+    return transforms.Compose(
+        [
+            transforms.Resize(256),
+            transforms.CenterCrop(input_size[0]),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ]
+    )

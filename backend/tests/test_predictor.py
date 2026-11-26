@@ -352,7 +352,7 @@ class TestFixRoundThree:
         """A non-dict model_state payload is rejected with a clean ValueError."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = tmp_path / "none_state.pt"
         torch.save(
             {
@@ -369,7 +369,7 @@ class TestFixRoundThree:
         """A non-iterable input_size in the checkpoint config is rejected."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         path = tmp_path / "int_size.pt"
         torch.save(
@@ -387,7 +387,7 @@ class TestFixRoundThree:
         """A string or int class_names payload is rejected, not silently split."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         base = {
             "model_state": model.state_dict(),
@@ -403,7 +403,7 @@ class TestFixRoundThree:
         """predict rejects float64 and integer tensors with a clean ValueError."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         pred = Predictor.from_checkpoint(str(_build_checkpoint(tmp_path, cfg)), cfg)
         with pytest.raises(ValueError, match="float32 tensor"):
             pred.predict(torch.randn(1, 3, 32, 32, dtype=torch.float64))
@@ -414,7 +414,7 @@ class TestFixRoundThree:
         """predict rejects a (1, 1, H, W) tensor with a clean ValueError."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         pred = Predictor.from_checkpoint(str(_build_checkpoint(tmp_path, cfg)), cfg)
         with pytest.raises(ValueError, match="matching checkpoint input size"):
             pred.predict(torch.randn(1, 1, 32, 32))
@@ -428,7 +428,7 @@ class TestFixRoundFour:
         """Non-int input_size elements are rejected before Config construction."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         path = tmp_path / "bad_elem.pt"
         torch.save(
@@ -448,7 +448,7 @@ class TestFixRoundFour:
 
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         ckpt = torch.load(path, weights_only=True)
         ckpt["model_state"]["head.4.weight"].fill_(float("nan"))
@@ -467,7 +467,7 @@ class TestFixRoundFour:
         """A hostile CNN_MODEL_PATH env cannot break checkpoint loading."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         monkeypatch.setenv("CNN_MODEL_PATH", "/etc/passwd")
         path = _build_checkpoint(tmp_path, cfg)
         pred = Predictor.from_checkpoint(str(path), cfg)
@@ -479,7 +479,7 @@ class TestFixRoundFour:
         """class_names lists containing non-string items are rejected."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         path = tmp_path / "bad_names.pt"
         torch.save(
@@ -498,7 +498,7 @@ class TestFixRoundFour:
         """input_size of wrong arity is rejected by the config guard."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         path = tmp_path / "bad_len.pt"
         torch.save(
@@ -527,7 +527,7 @@ class TestFixRoundFive:
         """Non-string model_name payloads are rejected with a clean ValueError."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = tmp_path / "bad_name.pt"
         torch.save(
             {
@@ -544,7 +544,7 @@ class TestFixRoundFive:
         """NaN or Inf input tensors are rejected instead of predicting NaN."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         pred = Predictor.from_checkpoint(str(path), cfg)
         with pytest.raises(ValueError, match="non-finite"):
@@ -557,7 +557,7 @@ class TestFixRoundFive:
         """Out-of-range but well-typed input_size is caught by the Config layer."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = tmp_path / "range.pt"
         torch.save(
             {
@@ -576,7 +576,7 @@ class TestFixRoundFive:
 
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         ckpt = torch.load(path, weights_only=True)
         ckpt["model_state"] = {key: "corrupt" for key in ckpt["model_state"]}
@@ -597,7 +597,7 @@ class TestFixRoundFive:
 
         from cnn_classifier.inference.checkpoints import load_checkpoint
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         with pytest.raises(ValueError, match="not a regular file"):
             load_checkpoint(tmp_path)
         path = _build_checkpoint(tmp_path, cfg)
@@ -636,7 +636,7 @@ class TestFixRoundSix:
         from cnn_classifier.inference.predictor import Predictor
         from cnn_classifier.models.transfer import TransferModel
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         monkeypatch.setenv("CNN_BATCH_SIZE", "512")
         ckpt_cfg = Config(device="cpu", input_size=(500, 500), batch_size=1)
         model = TransferModel("resnet18", ckpt_cfg, pretrained=False)
@@ -653,7 +653,7 @@ class TestFixRoundSix:
 
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         ckpt = torch.load(path, weights_only=True)
         ckpt["model_state"] = {
@@ -674,7 +674,7 @@ class TestFixRoundSix:
         """NaN/Inf probabilities raise instead of reaching the serving layer."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         state = model.state_dict()
         state["head.4.weight"].fill_(float("inf"))
@@ -748,7 +748,7 @@ class TestFixRoundSeven:
 
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         pred = Predictor.from_checkpoint(Path(_build_checkpoint(tmp_path, cfg)), cfg)
         results = pred.predict(torch.randn(1, 3, 32, 32))
         assert len(results) == 10
@@ -757,7 +757,7 @@ class TestFixRoundSeven:
         """More class names than model outputs is also rejected cleanly."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         path = tmp_path / "eleven.pt"
         torch.save(
@@ -775,7 +775,7 @@ class TestFixRoundSeven:
         """Direct Predictor construction coerces list input_size to a tuple."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         model = get_model("cnn_scratch", cfg)
         pred = Predictor(model, list(cfg.class_names), "cpu", [32, 32], model_name="cnn_scratch")
         assert pred.input_size == (32, 32)
@@ -784,7 +784,7 @@ class TestFixRoundSeven:
         """A zero-sized batch falls into the single-image rejection branch."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         pred = Predictor.from_checkpoint(str(_build_checkpoint(tmp_path, cfg)), cfg)
         with pytest.raises(ValueError, match="single-image"):
             pred.predict(torch.randn(0, 3, 32, 32))
@@ -793,7 +793,7 @@ class TestFixRoundSeven:
         """An empty file is rejected as an invalid checkpoint."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         empty = tmp_path / "empty.pt"
         empty.write_bytes(b"")
         with pytest.raises(ValueError, match="not a valid torch checkpoint"):
@@ -823,7 +823,7 @@ class TestFixRoundSeven:
         """A hostile CNN_INPUT_SIZE env cannot override checkpoint provenance."""
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         monkeypatch.setenv("CNN_INPUT_SIZE", "[16, 16]")
         path = _build_checkpoint(tmp_path, cfg)
         pred = Predictor.from_checkpoint(str(path), cfg)
@@ -859,7 +859,7 @@ class TestNormalizationProvenance:
 
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         self._resave_with_normalization(
             path,
@@ -873,7 +873,7 @@ class TestNormalizationProvenance:
         from cnn_classifier.data.dataset import CIFAR10_MEAN, CIFAR10_STD
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         self._resave_with_normalization(
             path,
@@ -889,7 +889,7 @@ class TestNormalizationProvenance:
 
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         ckpt = torch.load(path, weights_only=True)
         del ckpt["config"]["normalization"]
@@ -907,7 +907,7 @@ class TestNormalizationProvenance:
 
         from cnn_classifier.inference.predictor import Predictor
 
-        cfg = Config(device="cpu", batch_size=2, num_workers=0)
+        cfg = Config(device="cpu", batch_size=2, num_workers=0, input_size=(32, 32))
         path = _build_checkpoint(tmp_path, cfg)
         self._resave_with_normalization(path, {"mean": [0.5], "std": [0.2]})
         with pytest.raises(ValueError, match="malformed checkpoint normalization"):

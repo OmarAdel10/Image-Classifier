@@ -38,6 +38,7 @@ def get_predictor():
         if _is_imagenet_model(model_path):
             # Load ImageNet pre-trained model
             from cnn_classifier.inference.imagenet_predictor import ImageNetPredictor
+
             return ImageNetPredictor.from_pretrained(
                 model_name="resnet18",
                 config=config,
