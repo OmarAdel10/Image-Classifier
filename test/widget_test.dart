@@ -139,6 +139,7 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
 
       // Check for at least one occurrence (widget may render multiple)
       expect(find.text('cat'), findsAtLeastNWidgets(1));
