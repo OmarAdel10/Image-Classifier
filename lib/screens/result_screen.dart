@@ -121,7 +121,7 @@ class _ImagePreview extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: AspectRatio(
-        aspectRatio: 1,
+        aspectRatio: 2.0,
         child: FutureBuilder<Uint8List>(
           future: imageFile.readAsBytes(),
           builder: (context, snapshot) {

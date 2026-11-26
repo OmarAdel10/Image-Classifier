@@ -5,9 +5,11 @@ import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:image_classifier/config.dart';
 import 'package:image_classifier/models/model_info.dart';
 import 'package:image_classifier/models/prediction.dart';
+import 'package:mime/mime.dart';
 
 /// Custom exception for API errors.
 ///
@@ -174,7 +176,12 @@ class ApiClient {
     // problem too, so the backend is never blamed for it.
     final http.MultipartFile upload;
     try {
-      upload = await http.MultipartFile.fromPath('file', imageFile.path);
+      final mimeType = lookupMimeType(imageFile.path) ?? 'image/jpeg';
+      upload = await http.MultipartFile.fromPath(
+        'file',
+        imageFile.path,
+        contentType: MediaType.parse(mimeType),
+      );
     } on IOException {
       // The file cannot be read. The message names the problem only: the
       // local path stays out of the text that reaches the screen. The
@@ -243,9 +250,15 @@ class ApiClient {
   ) async {
     final url = await baseUrl;
     final http.Response response = await _handleRequest(url, () async {
+      final mimeType = lookupMimeType(fileName) ?? 'image/jpeg';
       final request = http.MultipartRequest('POST', Uri.parse('$url/predict'))
         ..files.add(
-          http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+          http.MultipartFile.fromBytes(
+            'file',
+            bytes,
+            filename: fileName,
+            contentType: MediaType.parse(mimeType),
+          ),
         );
 
       final stopwatch = Stopwatch()..start();

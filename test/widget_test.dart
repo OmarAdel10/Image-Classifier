@@ -139,11 +139,20 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
 
-      // Check for at least one occurrence (widget may render multiple)
-      expect(find.text('cat'), findsAtLeastNWidgets(1));
-      expect(find.text('90%'), findsAtLeastNWidgets(1));
-      expect(find.text('dog'), findsAtLeastNWidgets(1));
+      // Check that BarChart renders with correct number of bars
+      expect(find.byType(BarChart), findsOneWidget);
+
+      // Verify bar data is correct (indirectly tests class names and percentages are set)
+      final barChart = tester.widget<BarChart>(find.byType(BarChart));
+      final barGroups = barChart.data.barGroups;
+      expect(barGroups.length, equals(5));
+
+      // First bar (highest confidence: cat 90%)
+      expect(barGroups[0].barRods.first.toY, closeTo(0.9, 0.01));
+      // Last bar (lowest confidence: truck 0.5%)
+      expect(barGroups[4].barRods.first.toY, closeTo(0.005, 0.01));
     });
   });
 

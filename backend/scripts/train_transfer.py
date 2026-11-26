@@ -29,6 +29,18 @@ def parse_args(argv=None):
         metavar=("H", "W"),
         help="only 32 32 currently supported (CIFAR-10 native)",
     )
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default="checkpoints/best_model.pt",
+        help="Path to save the trained model checkpoint (default: checkpoints/best_model.pt)",
+    )
+    parser.add_argument(
+        "--labels-path",
+        type=str,
+        default="checkpoints/labels.json",
+        help="Path to save the class labels JSON (default: checkpoints/labels.json)",
+    )
     args = parser.parse_args(argv)
     args.input_size = tuple(args.input_size)
     if args.input_size != (32, 32):
@@ -44,7 +56,9 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     args = parse_args()
-    os.environ.setdefault("CNN_MODEL_PATH", f"checkpoints/best_model_{args.model_name}.pt")
+    # Set env vars for config to pick up the paths
+    os.environ.setdefault("CNN_MODEL_PATH", args.model_path)
+    os.environ.setdefault("CNN_LABELS_PATH", args.labels_path)
     from cnn_classifier.config import Config
 
     config = Config(input_size=tuple(args.input_size))

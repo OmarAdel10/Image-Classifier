@@ -19,6 +19,36 @@ A CIFAR-10 image classification system with a PyTorch/FastAPI backend and a Flut
 └─────────────────┘                     └──────────────────┘
 ```
 
+### Startup Flow (Auto-Connect)
+
+```
+flutter run -d linux
+        │
+        ▼
+┌─────────────────────┐
+│  BackendController  │
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐     127.0.0.1:8000     ┌──────────────────┐
+│  Managed Backend?   │ ─────────────────────► │  Backend Process │
+│  (default: yes)     │     python -m uvicorn  │  (lifespan load) │
+└─────────┬───────────┘     cnn_classifier.    │  /health → /ready│
+          │             api.main:app            └──────────────────┘
+          ▼
+┌─────────────────────┐
+│  Poll /health (30s) │──► 200 OK + service=cnn-classifier
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│  Poll /ready (60s)  │──► 200 OK + model_loaded=true
+└─────────┬───────────┘
+          ▼
+┌─────────────────────┐
+│  Connect & Show UI  │
+└─────────────────────┘
+```
+
 ## Project Structure
 
 ```
@@ -26,27 +56,32 @@ A CIFAR-10 image classification system with a PyTorch/FastAPI backend and a Flut
 ├── backend/                    # FastAPI + PyTorch backend
 │   ├── src/
 │   │   └── cnn_classifier/
-│   │       ├── api/            # FastAPI routes (health, predict, model-info)
+│   │       ├── api/            # FastAPI routes (health, ready, predict, model-info)
 │   │       ├── config.py       # Configuration (env-configurable)
 │   │       ├── inference/      # Checkpoint loading, preprocessing, prediction
+│   │       ├── logging_config.py # Structured logging with request IDs
 │   │       ├── models/         # Model registry (cnn_scratch, resnet18, vgg16)
 │   │       └── training/       # Training loop, checkpointing
 │   ├── scripts/
 │   │   ├── fetch_cifar10.sh    # Verified CIFAR-10 download (used by CI)
 │   │   ├── train_scratch.py    # Train from scratch
 │   │   ├── train_transfer.py   # Fine-tune a pretrained model
+│   │   ├── run_backend.py      # Backend launcher (stdin watchdog)
 │   │   └── export_onnx.py      # Export to ONNX
-│   ├── tests/                  # pytest suite (402 tests)
+│   ├── tests/                  # pytest suite (414 tests)
 │   └── pyproject.toml
 ├── lib/                        # Flutter app
 │   ├── config.dart             # Config (--dart-define overrides)
 │   ├── main.dart               # App entry point
-│   ├── models/                 # Data models (PredictionItem, ModelInfo)
-│   ├── providers/              # PredictionProvider (ChangeNotifier)
-│   ├── screens/                # HomeScreen, ResultScreen, SettingsScreen
-│   ├── services/               # ImageService, ApiClient
+│   ├── models/                 # Data models (PredictionItem, ModelInfo, BackendStatus)
+│   ├── providers/              # BackendController, PredictionProvider
+│   ├── screens/                # HomeScreen, ResultScreen, SettingsScreen, StartupScreen
+│   ├── services/               # ImageService, ApiClient, BackendLocator, BackendProcessManager
 │   └── widgets/                # DropZone, PredictionBars, ModelInfoCard, LoadingOverlay
-├── test/                       # Flutter widget tests
+├── test/                       # Flutter widget tests (341 tests)
+├── scripts/                    # Helper scripts
+│   ├── setup_dev.sh            # Development environment setup
+│   └── train_first_model.sh    # Train first model checkpoint
 ├── .github/workflows/
 │   ├── backend-ci.yml          # Python CI (ruff, black, pytest)
 │   ├── flutter-ci.yml          # Flutter CI (format, analyze, test) + gitleaks
@@ -55,7 +90,55 @@ A CIFAR-10 image classification system with a PyTorch/FastAPI backend and a Flut
 └── README.md
 ```
 
-## Backend Setup
+## Quick Start (First Working Version)
+
+### Prerequisites
+- Python 3.11+
+- Flutter SDK 3.24+
+- Linux desktop environment
+
+### One-Time Setup
+
+```bash
+# 1. Clone and enter the repo
+git clone https://github.com/OmarAdel10/Image-Classifier.git
+cd Image-Classifier
+
+# 2. Run the setup script (installs Python deps, creates venv, installs CUDA torch if GPU detected)
+./scripts/setup_dev.sh
+
+# 3. Train the first model checkpoint (resnet18 transfer, ~3-5 min on GPU, ~15-20 min on CPU)
+./scripts/train_first_model.sh
+# Or for from-scratch training: ./scripts/train_first_model.sh --model cnn_scratch --epochs 20
+```
+
+### Run the App
+
+```bash
+# From the repo root
+flutter run -d linux
+```
+
+That's it! The app will:
+1. Auto-start the FastAPI backend on `127.0.0.1:8000`
+2. Wait for the model to load (`/ready` endpoint)
+3. Connect and show the UI
+4. Stop the backend when you close the app
+
+No manual backend startup needed!
+
+---
+
+## Helper Scripts
+
+| Script | Description |
+|--------|-------------|
+| `./scripts/setup_dev.sh` | Creates Python venv, installs deps, detects CUDA, installs CUDA torch if GPU present |
+| `./scripts/train_first_model.sh` | Trains model and saves to canonical `backend/checkpoints/best_model.pt`. Options: `--model resnet18|cnn_scratch`, `--epochs N`, `--lr LR`, `--batch-size BS` |
+
+---
+
+## Backend Setup (Advanced)
 
 ### Prerequisites
 - Python 3.11+
@@ -77,14 +160,36 @@ python scripts/train_scratch.py --epochs 20 --lr 1e-3 --model-name cnn_scratch
 python scripts/train_transfer.py --model-name resnet18 --epochs 10 --lr 1e-4
 ```
 
-Checkpoints are saved to `backend/checkpoints/best_model.pt`.
+Checkpoints are saved to `backend/checkpoints/best_model.pt` (canonical path).
 
-### Running the API Server
+### Running the API Server Manually
 ```bash
-uvicorn cnn_classifier.api.main:app --host 0.0.0.0 --port 8000
+# Using the launcher (recommended - handles stdin watchdog, logging)
+python scripts/run_backend.py
+
+# Or directly with uvicorn
+uvicorn cnn_classifier.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-The API will be available at `http://localhost:8000`.
+The API will be available at `http://127.0.0.1:8000`.
+
+### Configuration (Environment Variables)
+```bash
+# Server
+CNN_PORT=8000
+CNN_HOST=127.0.0.1
+
+# Model paths (relative to project root)
+CNN_MODEL_PATH=checkpoints/best_model.pt
+CNN_LABELS_PATH=checkpoints/labels.json
+
+# Device: cpu, cuda, mps, or auto (auto-detects best available)
+CNN_DEVICE=auto
+
+# Logging
+CNN_LOG_LEVEL=INFO        # DEBUG, INFO, WARNING, ERROR, CRITICAL
+CNN_LOG_JSON=false        # true for JSON format (CI/parsers)
+```
 
 ### API Endpoints
 
@@ -129,44 +234,36 @@ python backend/scripts/export_onnx.py \
 - Linux desktop environment
 
 ### Configuration
-The app uses `--dart-define` for configuration:
+
+The app uses `--dart-define` for compile-time configuration:
 ```bash
 flutter run -d linux \
-  --dart-define=API_BASE_URL=http://localhost:8000 \
+  --dart-define=API_BASE_URL=http://my-backend:8000 \
   --dart-define=REQUEST_TIMEOUT_SEC=30
 ```
 
-#### API Base URL Resolution Order
+#### Connection Modes
 
-The backend address is resolved in this order:
+The app supports three connection modes (in priority order):
 
-1. **Compile-time override** — `--dart-define=API_BASE_URL=...`. Always wins.
-   Such a build is **pinned**: the settings screen disables **Save** and the
-   app refuses to store a runtime override, so the address cannot change
-   behind the flag.
-2. **Runtime override** — set in the app via the ⚙ *Backend Settings* screen
-   (gear icon in the app bar). Persisted with `shared_preferences`. Only a
-   build without a compile-time override can store one.
-3. **Platform default** — depends on the target:
-   - Linux / Windows / macOS desktop → `http://localhost:8000`
-   - Android emulator → `http://10.0.2.2:8000`
-     (the emulator's `localhost` is the emulator itself, not your computer)
+| Mode | Description | How to Enable |
+|------|-------------|---------------|
+| **Managed (default)** | App auto-starts backend on `127.0.0.1:8000`, waits for model load, connects automatically | No `--dart-define`, no saved URL in Settings |
+| **Compile-time override** | Uses `--dart-define=API_BASE_URL=...` for a fixed external backend. Settings Save disabled. | Pass `--dart-define=API_BASE_URL=...` at build/run time |
+| **Runtime override** | Set custom URL in ⚙ Settings screen. Persisted via `shared_preferences`. | Enter URL in Settings → Save |
 
-The settings screen has a **Test Connection** button that probes `/health`
-against the typed URL before you save it, and reports the address it tried
-when the connection fails. Any credentials in that address are removed
-first, so the banner cannot repeat a password.
+The settings screen has a **Test Connection** button that probes `/health` against the typed URL before you save it, and reports the address it tried when the connection fails. Any credentials in that address are removed first, so the banner cannot repeat a password.
 
-#### Reaching the Backend
+#### Managed Backend Details
 
-| Where the app runs | URL to use | Backend must be started as |
-|---|---|---|
-| Linux/Windows/macOS desktop | `http://localhost:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` |
-| Android emulator | `http://10.0.2.2:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` |
-| Physical phone/tablet | `http://<your-LAN-IP>:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` |
-| Web browser | `http://<host>:8000` | `uvicorn ... --host 0.0.0.0 --port 8000` (CORS must allow the origin) |
+- **Auto-start**: `python scripts/run_backend.py` (uses stdin watchdog — backend dies when app closes)
+- **Health probe**: Polls `/health` every 250ms for up to 30s
+- **Readiness probe**: Polls `/ready` every 250ms for up to 60s (waits for model load)
+- **Service marker**: `/health` returns `{"service": "cnn-classifier"}` so app never attaches to wrong service on port 8000
+- **Port fallback**: If 8000 busy, tries 8001-8010, then OS-assigned ephemeral port
+- **Logs**: Backend stdout/stderr piped to app console with `[backend]` prefix
 
-### Running the App
+#### Running the App
 ```bash
 flutter pub get
 flutter run -d linux
@@ -189,22 +286,54 @@ The binary will be at `build/linux/x64/release/bundle/image_classifier`.
 ### CIFAR-10 Classes
 `airplane`, `automobile`, `bird`, `cat`, `deer`, `dog`, `frog`, `horse`, `ship`, `truck`
 
-## API Usage Examples
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Liveness probe (always 200 if process alive) |
+| GET | `/ready` | Readiness probe (200 when model loaded, 503 otherwise) |
+| GET | `/model-info` | Model metadata (name, input size, classes, device, trained_at) |
+| POST | `/predict` | Classify image (multipart/form-data, max 10MB) |
 
 ### Health Check
 ```bash
-curl http://localhost:8000/health
-# {"status": "ok"}
+curl http://127.0.0.1:8000/health
+# {"status": "ok", "service": "cnn-classifier"}
+```
+
+### Readiness Check
+```bash
+curl http://127.0.0.1:8000/ready
+# Model loaded:
+# {"status": "ready", "service": "cnn-classifier", "model_loaded": true,
+#  "model_path": "/path/to/checkpoints/best_model.pt", "device": "cuda", "classes": 10}
+#
+# Model not loaded:
+# {"status": "not_ready", "service": "cnn-classifier", "model_loaded": false,
+#  "error": "Checkpoint not found"}
 ```
 
 ### Model Info
 ```bash
-curl http://localhost:8000/model-info
+curl http://127.0.0.1:8000/model-info
 ```
 
 ### Predict (curl)
 ```bash
-curl -X POST -F "file=@cat.jpg" http://localhost:8000/predict
+curl -X POST -F "file=@cat.jpg" http://127.0.0.1:8000/predict
+```
+
+Response:
+```json
+{
+  "predictions": [
+    {"class_name": "cat", "confidence": 0.92},
+    {"class_name": "dog", "confidence": 0.05},
+    ...
+  ],
+  "latency_ms": 42.5,
+  "model": "cnn_scratch"
+}
 ```
 
 ### Predict (Python)
@@ -212,7 +341,7 @@ curl -X POST -F "file=@cat.jpg" http://localhost:8000/predict
 import requests
 
 with open("cat.jpg", "rb") as f:
-    resp = requests.post("http://localhost:8000/predict", files={"file": f})
+    resp = requests.post("http://127.0.0.1:8000/predict", files={"file": f})
     print(resp.json())
 ```
 
@@ -228,6 +357,11 @@ with open("cat.jpg", "rb") as f:
 | `the file is larger than the 10485760 byte limit` | The app rejects images over 10 MiB before upload. Crop or re-encode the image. |
 | `Model unavailable` | Ensure `backend/checkpoints/best_model.pt` exists |
 | Flutter build fails | Run `flutter clean && flutter pub get` |
+| **Backend fails to start** | Check console for `[backend]` prefixed logs. Common: Python not in PATH, missing deps (`./scripts/setup_dev.sh`), port conflict. |
+| **Stuck on "Starting Backend"** | Port 8000 may be occupied. Check `lsof -i :8000`. The app tries 8001-8010 then falls back. |
+| **Stuck on "Loading Model"** | Check `/ready` endpoint. If 503, model checkpoint missing: run `./scripts/train_first_model.sh`. |
+| **Backend logs not showing** | Ensure `CNN_LOG_LEVEL` not set to `WARNING` or `ERROR`. Default is `INFO`. |
+| **`Model unavailable` on /predict** | Checkpoint not found at `backend/checkpoints/best_model.pt`. Run `./scripts/train_first_model.sh`. |
 
 ## Development
 
@@ -243,6 +377,10 @@ pytest tests/
 flutter analyze
 dart format --set-exit-if-changed lib test
 flutter test
+
+# Helper scripts
+./scripts/setup_dev.sh
+./scripts/train_first_model.sh
 ```
 
 ### CI/CD
