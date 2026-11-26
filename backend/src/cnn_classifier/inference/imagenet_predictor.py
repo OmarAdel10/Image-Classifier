@@ -1,6 +1,5 @@
 """ImageNet pre-trained predictor: load a torchvision model and run inference."""
 
-from collections import namedtuple
 from pathlib import Path
 from typing import Literal
 
@@ -54,21 +53,21 @@ class ImageNetPredictor:
         weights_enum = cls._get_weights_enum(model_name)
         model_fn = getattr(models, model_name)
         model = model_fn(weights=weights_enum)
-        
+
         # Use provided class names or default to ImageNet 1000 classes
         if class_names is None:
             class_names = cls._load_imagenet_labels(config)
-        
+
         model = model.to(config.device)
         model.eval()
-        
+
         # Verify output dimension matches class count
         probe_size = (min(config.input_size[0], 512), min(config.input_size[1], 512))
         with torch.no_grad():
             probe = model(torch.ones(1, 3, *probe_size, device=config.device))
         if len(class_names) != probe.shape[1]:
             raise ValueError(f"class count {len(class_names)} != model outputs {probe.shape[1]}")
-        
+
         return cls(
             model,
             class_names,
