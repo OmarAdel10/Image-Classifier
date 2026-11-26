@@ -10,10 +10,8 @@ from fastapi.testclient import TestClient
 # Ensure backend/src is on path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from cnn_classifier.api import main as api_main
-from cnn_classifier.api.dependencies import clear_predictor_cache, get_predictor
+from cnn_classifier.api.dependencies import clear_predictor_cache
 from cnn_classifier.api.main import app
-from cnn_classifier.api.schemas import ReadyResponse
 
 
 class TestReadinessEndpoint:
